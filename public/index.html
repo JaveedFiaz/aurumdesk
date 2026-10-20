@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AurumDesk · XAU/USD Terminal</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">Au</span><span>AurumDesk</span></div>
+    <div class="quote">
+      <span class="sym">XAU/USD</span>
+      <span id="price" class="price">—</span>
+      <span id="change" class="chg"></span>
+    </div>
+    <div class="status">
+      <span id="source" class="badge"></span>
+      <span id="conn" class="conn" title="Connecting">●</span>
+    </div>
+  </header>
+
+  <nav class="toolbar">
+    <div id="tfs" class="seg" role="group" aria-label="Timeframe"></div>
+    <div id="layers" class="chips" role="group" aria-label="Chart layers"></div>
+  </nav>
+
+  <main class="main">
+    <section class="chart-wrap">
+      <div id="chart"></div>
+      <canvas id="overlay"></canvas>
+      <div id="banner" class="banner" hidden></div>
+      <div id="loading" class="loading">Loading chart…</div>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h2>Market read <span id="readTf" class="muted"></span></h2>
+        <dl id="read" class="read"></dl>
+      </section>
+
+      <section class="card">
+        <h2>Sessions</h2>
+        <ul id="sessions" class="sessions"></ul>
+      </section>
+
+      <section class="card">
+        <h2>Position size</h2>
+        <form id="calc" class="calc" autocomplete="off">
+          <label>Balance ($)<input name="balance" type="number" step="any" value="10000"></label>
+          <label>Risk (%)<input name="risk" type="number" step="any" value="1"></label>
+          <label>Entry<input name="entry" type="number" step="any"></label>
+          <label>Stop loss<input name="stop" type="number" step="any"></label>
+          <label>Take profit<input name="target" type="number" step="any"></label>
+          <label>Oz per lot<input name="contract" type="number" step="any" value="100"></label>
+          <div class="calc-actions">
+            <button type="button" id="usePrice">Use live price</button>
+            <label class="inline"><input type="checkbox" id="showPlan"> Show on chart</label>
+          </div>
+          <dl id="calcOut" class="read"></dl>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Alerts</h2>
+        <label class="inline"><input type="checkbox" id="notify"> Browser notifications</label>
+        <p class="muted small">Logged here while the page is open: new BOS/CHoCH, liquidity grabs, and price entering a zone scored 60+.</p>
+        <ol id="alerts" class="alerts"></ol>
+      </section>
+
+      <p class="risk">Educational charting tool. Not financial advice and not trade signals. Prices are indicative and may differ from your broker. Trading leveraged gold products can lose you more than you invest.</p>
+    </aside>
+  </main>
+
+  <script src="/vendor/lightweight-charts.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# One-click deploy on Render (https://render.com). Render sets PORT itself.
+services:
+  - type: web
+    name: aurumdesk
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: PROVIDER
+        value: binance
+      - key: TWELVEDATA_API_KEY
+        sync: false

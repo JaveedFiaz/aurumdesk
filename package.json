@@ -1,0 +1,25 @@
+{
+  "name": "aurumdesk",
+  "version": "1.0.0",
+  "description": "Self-hosted XAU/USD gold trading terminal with market structure, order blocks, supply/demand, liquidity, VWAP and volume profile.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "demo": "node server/index.js --demo",
+    "test": "node --test",
+    "build:hosted": "node hosted/build.mjs"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "lightweight-charts": "4.2.3"
+  },
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.12"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
+  }
+}
