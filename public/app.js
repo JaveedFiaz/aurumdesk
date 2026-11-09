@@ -4,6 +4,7 @@ import { Overlay, COLORS } from '/overlay.js';
 import { initSessions } from '/sessions.js';
 import { initCalculator } from '/calculator.js';
 import { feed } from '/feed.js';
+import { STRATEGY_BY_ID } from '/shared/strategies.js';
 
 const LC = window.LightweightCharts;
 const $ = (id) => document.getElementById(id);
@@ -54,6 +55,8 @@ const state = {
   seq: 0,
   seenEvent: null,
   alertedZones: new Set(),
+  bot: null,
+  seenSignals: null,
 };
 
 // ---- Chart ----------------------------------------------------------------
@@ -117,6 +120,7 @@ async function load({ soft = false } = {}) {
     if (range) chart.timeScale().setVisibleLogicalRange(range);
     if (!soft) chart.timeScale().scrollToRealTime();
     runAnalysis();
+    drawBotMarkers();
     hideBanner();
   } catch (e) {
     if (seq === state.seq) showBanner(`Could not load ${tf} candles: ${e.message}`);
@@ -375,6 +379,114 @@ function drawPlan(plan) {
   add(plan.target, '#26a69a', 'TP');
 }
 
+// ---- Trade finder ---------------------------------------------------------
+
+const esc = (v) => String(v).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const stratName = (id) => STRATEGY_BY_ID[id]?.name || id;
+const signalId = (t) => `${t.strategy}:${t.signalTime}`;
+const shortTime = (t) => new Date(t * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+async function loadBot() {
+  try {
+    state.bot = await feed.bot();
+  } catch (e) {
+    $('botSignals').innerHTML = `<p class="bear small">Trade finder unavailable: ${esc(e.message)}</p>`;
+    return;
+  }
+  renderBot();
+  checkSignalAlerts();
+  drawBotMarkers();
+}
+
+function renderBot() {
+  const b = state.bot;
+  if (!b) return;
+  const sig = b.signals.slice().reverse();
+  $('botSignals').innerHTML = sig.length
+    ? sig.map((t, k) => {
+      const open = t.status === 'open';
+      return `<div class="signal ${t.dir}">
+        <div class="head"><span class="${t.dir}">${t.dir === 'bull' ? 'LONG' : 'SHORT'} · ${esc(stratName(t.strategy))}</span>
+          <span class="tag${open ? ' open' : ''}">${open ? 'Running' : 'New'}</span></div>
+        <div class="lv"><div><span>${open ? 'Entered' : 'Entry ≈'}</span>${fmt(t.entry)}</div><div><span>Stop</span>${fmt(t.stop)}</div><div><span>Target</span>${fmt(t.target)}</div></div>
+        <div class="why">${esc(t.why)} · ${shortTime(t.signalTime + 900)}</div>
+        <button type="button" data-sig="${k}">Size it &amp; show on chart</button>
+      </div>`;
+    }).join('')
+    : `<p class="muted small">No setup right now. ${b.stats.some((s) => s.active) ? 'Active strategies check every closed 15m candle.' : 'No strategy passed the backtest, so nothing is signalled until one does.'}</p>`;
+  $('botSignals').querySelectorAll('button[data-sig]').forEach((btn) => btn.addEventListener('click', () => planSignal(sig[+btn.dataset.sig])));
+
+  $('botStats').innerHTML = b.stats.map((s) => `<tr class="${s.active ? '' : 'inactive'}" title="${esc(s.desc)}">
+    <td>${esc(s.name)}</td><td>${s.trades}</td><td>${(s.winRate * 100).toFixed(0)}%</td>
+    <td>${Number.isFinite(s.pf) ? s.pf.toFixed(2) : '∞'}</td><td class="${s.expR >= 0 ? 'bull' : 'bear'}">${s.expR >= 0 ? '+' : ''}${s.expR.toFixed(2)}</td>
+    <td class="${s.active ? 'on' : 'off'}">${s.active ? 'Active' : 'Off'}</td></tr>`).join('');
+
+  $('botRecent').innerHTML = b.recent.slice().reverse().slice(0, 20).map((t) => `<li>
+    <time>${shortTime(t.signalTime)}</time><span class="${t.dir}">${t.dir === 'bull' ? '▲' : '▼'} ${esc(stratName(t.strategy))}</span>
+    <span class="r ${t.r > 0 ? 'bull' : 'bear'}">${t.r > 0 ? '+' : ''}${t.r.toFixed(2)}R</span></li>`).join('') || '<li class="muted">No closed trades yet</li>';
+
+  $('botNote').textContent = `Backtest: ${b.days} days of ${b.demo ? 'demo prices' : b.provider}, London/NY hours, ${b.rules.rr}R target, $${b.rules.cost.toFixed(2)} cost per trade, max ${b.rules.maxPerDay} trades/day. `
+    + `A strategy is Active only with ${b.approval.minTrades}+ trades, profit factor ≥ ${b.approval.minPF}, and still profitable on the most recent ${b.approval.oosShare * 100}% of the data. Updated ${new Date(b.generatedAt * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}.`;
+}
+
+// Fills the position-size calculator (1% risk by default) and draws entry/SL/TP.
+function planSignal(t) {
+  if (!t) return;
+  const f = $('calc');
+  f.elements.entry.value = t.entry.toFixed(2);
+  f.elements.stop.value = t.stop.toFixed(2);
+  f.elements.target.value = t.target.toFixed(2);
+  $('showPlan').checked = true;
+  f.dispatchEvent(new Event('input'));
+  f.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function checkSignalAlerts() {
+  const ids = new Set(state.bot.signals.map(signalId));
+  const prev = state.seenSignals;
+  state.seenSignals = ids;
+  if (!prev) return; // don't replay setups that were already live when the page opened
+  for (const t of state.bot.signals) {
+    if (prev.has(signalId(t)) || t.status !== 'pending') continue;
+    alertMsg(`Trade finder: ${t.dir === 'bull' ? 'LONG' : 'SHORT'} (${stratName(t.strategy)}) entry ≈ ${fmt(t.entry)}, SL ${fmt(t.stop)}, TP ${fmt(t.target)}`);
+    beep();
+  }
+}
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.08, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+    o.connect(g).connect(ctx.destination);
+    o.start();
+    o.stop(ctx.currentTime + 0.4);
+    o.onended = () => ctx.close();
+  } catch { /* browsers block audio until the user has interacted with the page */ }
+}
+
+// Entry arrows on the 15m chart, the timeframe the trade finder runs on.
+function drawBotMarkers() {
+  const b = state.bot;
+  if (!b || state.tf !== b.tf) {
+    candleSeries.setMarkers([]);
+    return;
+  }
+  const first = state.candles[0]?.time ?? 0;
+  const markers = [...b.recent, ...b.signals]
+    .filter((t) => t.active && t.entryTime >= first)
+    .map((t) => {
+      const long = t.dir === 'bull';
+      const res = t.status === 'closed' ? ` ${t.r > 0 ? '+' : ''}${t.r.toFixed(1)}R` : '';
+      return { time: t.entryTime, position: long ? 'belowBar' : 'aboveBar', color: long ? '#26a69a' : '#ef5350', shape: long ? 'arrowUp' : 'arrowDown', text: `${stratName(t.strategy)}${res}` };
+    })
+    .sort((x, y) => x.time - y.time);
+  candleSeries.setMarkers(markers);
+}
+
 // ---- Boot -----------------------------------------------------------------
 
 async function boot() {
@@ -396,6 +508,9 @@ async function boot() {
   setInterval(loadDayOpen, 5 * 60000);
   setInterval(() => load({ soft: true }), 60000);
   connect();
+  loadBot();
+  // The server reruns the finder once per closed 15m candle; polling picks it up within a minute.
+  setInterval(loadBot, 60000);
 }
 
 boot();

@@ -63,13 +63,73 @@ The side panel has a market summary, session clocks (DST-aware), a position-size
 calculator (100 oz per lot by default) that can draw entry/SL/TP on the chart,
 and in-page/browser alerts for new breaks, liquidity grabs and price entering zones scored 60+.
 
+## Trade finder
+
+The **Trade finder** panel looks for setups on the 15m chart, using the 1H chart for
+confirmation. Every 15 minutes, once a candle closes, the server backtests five
+strategies on about 100 days of history. Live setups come only from strategies that
+held up in that backtest.
+
+| Strategy | Setup |
+|---|---|
+| **Zone retest** | 15m and 1H trends agree. The first pullback into a fresh order block or supply/demand zone (score 50+) closes with a rejection candle. |
+| **Sweep + CHoCH** | Price wicks through a recent swing high or low and closes back inside (a liquidity grab), then breaks structure the other way within 12 bars. |
+| **PDH/PDL reject** | The day's first wick through the previous day's high or low closes back inside with a rejection candle. |
+| **VWAP pullback** | 15m and 1H trends agree. Price holds the daily VWAP for 3 bars, tags it, and closes back on the trend side. |
+| **1H zone reject** | The first touch of an untested 1H supply/demand zone (score 60+), rejected by the 15m candle. |
+
+Rules shared by every strategy:
+
+- Setups are only taken from London 08:00 to New York 17:00, local time in each city.
+- The stop sits beyond the zone or the wick, and must be between 0.5 and 3 ATR away.
+- The target is 2R, so the reward is twice the risk.
+- At most 3 trades per strategy per day, and one trade open per strategy at a time.
+
+The backtest is pessimistic on purpose:
+
+- It enters at the next candle's open.
+- It assumes the stop was hit first when one candle reaches both the stop and the target.
+- It charges **$0.40/oz per trade** for spread and slippage.
+- It closes any trade still open after 16 hours.
+
+A strategy is **Active** only if all of these hold:
+
+- at least 20 trades
+- profit factor of 1.15 or more
+- an average of +0.05R or more per trade
+- still profitable on the most recent 40% of the period (out of sample)
+
+Strategies that fail are listed but never signal.
+
+Every decision sees only the candles that had closed at that moment, and the
+live scan runs the same code as the backtest. A test checks that adding future
+candles never changes earlier signals.
+
+New setups appear in the panel and in the Alerts list, with a beep and an optional
+browser notification. **Size it & show on chart** fills the position-size calculator
+at your risk % (1% by default) and draws entry, stop and target. On the 15m chart,
+arrows mark past entries with their results.
+
+```bash
+npm run backtest            # ranking table + live setups from your PROVIDER
+npm run backtest -- --demo  # on synthetic prices
+npm run backtest -- --bars 20000 --json
+```
+
+The trade finder never places orders. Results depend on the data feed (PAXG trades
+24/7 and differs slightly from broker spot) and on your broker's spread. Past
+performance does not guarantee future results.
+
 ## Project layout
 
 ```
-server/index.js          HTTP server: static files, /api/candles, /api/stream (SSE ticks)
+server/index.js          HTTP server: static files, /api/candles, /api/bot, /api/stream (SSE ticks)
 server/providers/        binance, twelvedata, demo
 shared/timeframes.js     timeframe definitions, bucketing, aggregation
 shared/analysis.js       the analysis engine (pure functions, used in the browser)
+shared/strategies.js     trade-finder strategies and session filter
+shared/bot.js            backtester, strategy approval and live setups (/api/bot)
+server/backtest.js       npm run backtest
 public/                  UI: app.js, overlay.js (canvas drawings), sessions.js, calculator.js
 test/                    node:test suite
 ```
@@ -78,5 +138,6 @@ The chart is [TradingView Lightweight Charts](https://github.com/tradingview/lig
 
 ## Disclaimer
 
-Educational charting tool. It is not financial advice and does not give buy or
-sell signals. Prices are indicative and may differ from your broker.
+Educational tool. It is not financial advice. Trade-finder setups come from
+strategies that were profitable on recent history, which does not mean they will
+be profitable in future. Prices are indicative and may differ from your broker.

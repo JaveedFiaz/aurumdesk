@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TIMEFRAMES } from '../shared/timeframes.js';
 import { getCandles } from '../shared/candles.js';
+import { runBot, BOT_TF } from '../shared/bot.js';
 
 export { getCandles };
 import { createProvider } from './providers/index.js';
@@ -47,8 +48,21 @@ function resolveStatic(urlPath) {
   return file.startsWith(root + path.sep) ? file : null;
 }
 
-export function createApp({ provider, pollMs = provider.pollMs || 1000 }) {
+export function createApp({ provider, pollMs = provider.pollMs || 1000, botHistory = 10000 }) {
   const cache = new Map();
+  let bot = null;
+
+  // The trade finder reruns once per closed 15m candle; every visitor shares the result.
+  function botResult() {
+    const bucket = Math.floor(Date.now() / 1000 / BOT_TF.sec);
+    if (bot && bot.bucket === bucket) return bot.promise;
+    const promise = runBot({ provider, history: botHistory });
+    bot = { bucket, promise };
+    promise.catch(() => {
+      if (bot?.promise === promise) bot = null;
+    });
+    return promise;
+  }
   const clients = new Set();
   let timer = null;
   let lastTick = null;
@@ -98,6 +112,9 @@ export function createApp({ provider, pollMs = provider.pollMs || 1000 }) {
         const limit = Math.max(10, Math.min(MAX_LIMIT, parseInt(url.searchParams.get('limit'), 10) || 500));
         return send(res, 200, { tf, candles: await candles(tf, limit) });
       }
+      if (url.pathname === '/api/bot') {
+        return send(res, 200, await botResult());
+      }
       if (url.pathname === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write('retry: 3000\n\n');
@@ -130,7 +147,8 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const provider = createProvider(process.env);
   const port = +process.env.PORT || 3000;
   const pollMs = +process.env.POLL_MS || undefined;
-  createApp({ provider, pollMs }).listen(port, () => {
+  const botHistory = +process.env.BOT_HISTORY || undefined;
+  createApp({ provider, pollMs, botHistory }).listen(port, () => {
     console.log(`AurumDesk running at http://localhost:${port}  (data: ${provider.label})`);
   });
 }

@@ -9,6 +9,7 @@ async function getJSON(url) {
 
 export const feed = {
   config: () => getJSON('/api/config'),
+  bot: () => getJSON('/api/bot'),
   candles: async (tf, limit) => (await getJSON(`/api/candles?tf=${tf}&limit=${limit}`)).candles,
   subscribe(onMessage, onError) {
     const es = new EventSource('/api/stream');

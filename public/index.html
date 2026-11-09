@@ -35,6 +35,20 @@
     </section>
 
     <aside class="side">
+      <section class="card bot">
+        <h2>Trade finder <span class="muted">· 15m, 1H confirm</span></h2>
+        <div id="botSignals" class="signals"><p class="muted small">Backtesting strategies…</p></div>
+        <table class="stats">
+          <thead><tr><th>Strategy</th><th title="Closed trades in the backtest">Trades</th><th>Win</th><th title="Profit factor: money won ÷ money lost">PF</th><th title="Average result per trade, in multiples of the amount risked">Avg R</th><th></th></tr></thead>
+          <tbody id="botStats"></tbody>
+        </table>
+        <details class="recent">
+          <summary>Recent trades</summary>
+          <ol id="botRecent"></ol>
+        </details>
+        <p id="botNote" class="muted small"></p>
+      </section>
+
       <section class="card">
         <h2>Market read <span id="readTf" class="muted"></span></h2>
         <dl id="read" class="read"></dl>
@@ -65,11 +79,11 @@
       <section class="card">
         <h2>Alerts</h2>
         <label class="inline"><input type="checkbox" id="notify"> Browser notifications</label>
-        <p class="muted small">Logged here while the page is open: new BOS/CHoCH, liquidity grabs, and price entering a zone scored 60+.</p>
+        <p class="muted small">Logged here while the page is open: trade-finder setups, new BOS/CHoCH, liquidity grabs, and price entering a zone scored 60+.</p>
         <ol id="alerts" class="alerts"></ol>
       </section>
 
-      <p class="risk">Educational charting tool. Not financial advice and not trade signals. Prices are indicative and may differ from your broker. Trading leveraged gold products can lose you more than you invest.</p>
+      <p class="risk">Educational tool, not financial advice. Trade-finder setups come from strategies that were profitable on recent history; past results do not guarantee future results. Prices are indicative and may differ from your broker. Trading leveraged gold products can lose you more than you invest.</p>
     </aside>
   </main>
 

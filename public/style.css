@@ -138,6 +138,32 @@ label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; co
 .alerts li { display: flex; gap: 8px; }
 .alerts time { color: var(--muted); font-family: var(--mono); }
 
+.signals { display: grid; gap: 8px; margin-bottom: 10px; }
+.signal { border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 8px; padding: 8px 10px; background: var(--panel); font-size: 13px; }
+.signal.bull { border-left-color: var(--up); color: var(--text); }
+.signal.bear { border-left-color: var(--down); color: var(--text); }
+.signal .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 600; }
+.signal .tag { font: 600 11px var(--font); color: #14110a; background: var(--gold); border-radius: 4px; padding: 1px 6px; }
+.signal .tag.open { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
+.signal .lv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 6px 0; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+.signal .lv span { color: var(--muted); font-family: var(--font); display: block; font-size: 11px; }
+.signal .why { color: var(--muted); font-size: 12px; }
+.signal button { margin-top: 6px; font: 12px var(--font); color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+.signal button:hover { border-color: var(--gold); }
+.stats { width: 100%; border-collapse: collapse; font-size: 12px; }
+.stats th { color: var(--muted); font-weight: 500; text-align: right; padding: 2px 0 4px 6px; border-bottom: 1px solid var(--line); }
+.stats td { text-align: right; padding: 4px 0 4px 6px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.stats th:first-child, .stats td:first-child { text-align: left; padding-left: 0; font-family: var(--font); }
+.stats .on { color: var(--up); font-family: var(--font); font-size: 11px; }
+.stats .off { color: #4a5361; font-family: var(--font); font-size: 11px; }
+.stats tr.inactive td:first-child { color: var(--muted); }
+.recent { margin-top: 8px; font-size: 12px; }
+.recent summary { cursor: pointer; color: var(--muted); }
+.recent ol { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 3px; max-height: 180px; overflow-y: auto; }
+.recent li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; }
+.recent time { color: var(--muted); font-family: var(--mono); }
+.recent .r { font-family: var(--mono); }
+
 .risk { font-size: 11px; color: var(--muted); margin: 0 4px 8px; }
 
 @media (max-width: 860px) {

@@ -3,11 +3,13 @@
 
 import { createDemo } from '../server/providers/demo.js';
 import { getCandles } from '../shared/candles.js';
+import { runBot } from '../shared/bot.js';
 
 const provider = createDemo();
 
 export const feed = {
   config: async () => ({ provider: provider.name, label: provider.label, note: provider.note, demo: true }),
+  bot: () => runBot({ provider, history: 6000 }),
   candles: (tf, limit) => getCandles(provider, tf, limit),
   subscribe(onMessage) {
     const tick = async () => onMessage({ t: Math.floor(Date.now() / 1000), p: await provider.fetchPrice() });

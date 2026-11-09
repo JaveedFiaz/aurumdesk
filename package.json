@@ -8,6 +8,7 @@
     "dev": "node --watch server/index.js",
     "demo": "node server/index.js --demo",
     "test": "node --test",
+    "backtest": "node server/backtest.js",
     "build:hosted": "node hosted/build.mjs"
   },
   "license": "UNLICENSED",
