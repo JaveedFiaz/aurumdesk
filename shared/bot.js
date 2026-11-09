@@ -156,7 +156,7 @@ function dropForming(candles, sec, now) {
 }
 
 // Fetches history, backtests, ranks, and returns live setups from approved strategies.
-export async function runBot({ provider, now = Date.now() / 1000, history = 10000, rules = DEFAULT_RULES, cot = null } = {}) {
+export async function runBot({ provider, now = Date.now() / 1000, history = 10000, rules = DEFAULT_RULES, cot = null, full = false } = {}) {
   const [c15, c60] = await Promise.all([
     getCandles(provider, BOT_TF.id, history, { maxCandles: history + 100 }),
     getCandles(provider, BOT_HTF.id, Math.ceil(history / 4) + HTF_WINDOW, { maxCandles: Math.ceil(history / 4) + HTF_WINDOW + 100 }),
@@ -201,5 +201,7 @@ export async function runBot({ provider, now = Date.now() / 1000, history = 1000
     // The same, from strategies that have not proven an edge: shown, never traded.
     watch: trades.filter((t) => t.status !== 'closed' && !active.has(t.strategy)).map(strip),
     recent: trades.filter((t) => t.status === 'closed').slice(-40).map(strip),
+    // Every closed trade, for the CLI report (npm run backtest).
+    ...(full ? { closed: trades.filter((t) => t.status === 'closed').map(strip) } : {}),
   };
 }
