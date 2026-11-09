@@ -86,6 +86,7 @@ export function aggregate(candles, tf) {
       cur.close = c.close;
       cur.volume += c.volume || 0;
     }
+    if (c.buyVolume != null) cur.buyVolume = (cur.buyVolume || 0) + c.buyVolume;
   }
   return out;
 }

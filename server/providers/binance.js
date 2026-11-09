@@ -48,11 +48,24 @@ export function createBinance({ base = 'https://data-api.binance.vision', symbol
           low: +k[3],
           close: +k[4],
           volume: +k[5],
+          buyVolume: +k[9], // taker buy volume: market buyers lifting the offer
         })));
         if (rows.length < n) break;
         endTime = rows[0][0] - 1;
       }
       return out;
+    },
+
+    // Recent trades. isBuyerMaker means the seller hit the bid, so that trade was a market sell.
+    async fetchTrades(limit = 1000) {
+      const rows = await get(`/api/v3/aggTrades?symbol=${symbol}&limit=${Math.min(1000, limit)}`);
+      return rows.map((r) => ({ time: r.T / 1000, price: +r.p, size: +r.q, side: r.m ? 'sell' : 'buy' }));
+    },
+
+    async fetchBook(limit = 500) {
+      const j = await get(`/api/v3/depth?symbol=${symbol}&limit=${limit}`);
+      const side = (rows) => rows.map(([p, q]) => ({ price: +p, size: +q }));
+      return { bids: side(j.bids), asks: side(j.asks) };
     },
 
     async fetchPrice() {

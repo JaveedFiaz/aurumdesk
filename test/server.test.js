@@ -63,7 +63,7 @@ test('binance klines are paginated backwards and parsed', async () => {
     const last = end ? +end + 1 - 60000 : 1_700_000_000_000;
     const rows = Array.from({ length: lim }, (_, k) => {
       const t = last - (lim - 1 - k) * 60000;
-      return [t, '2400.1', '2401', '2399', '2400.5', '12.5', t + 59999];
+      return [t, '2400.1', '2401', '2399', '2400.5', '12.5', t + 59999, '30000', 40, '7.5', '18000', '0'];
     });
     return { ok: true, json: async () => rows };
   };
@@ -71,7 +71,7 @@ test('binance klines are paginated backwards and parsed', async () => {
     const c = await createBinance().fetchCandles('1m', 1500);
     assert.equal(calls.length, 2);
     assert.equal(c.length, 1500);
-    assert.deepEqual(c[c.length - 1], { time: 1_700_000_000, open: 2400.1, high: 2401, low: 2399, close: 2400.5, volume: 12.5 });
+    assert.deepEqual(c[c.length - 1], { time: 1_700_000_000, open: 2400.1, high: 2401, low: 2399, close: 2400.5, volume: 12.5, buyVolume: 7.5 });
     for (let i = 1; i < c.length; i++) assert.equal(c[i].time - c[i - 1].time, 60);
   } finally {
     globalThis.fetch = orig;

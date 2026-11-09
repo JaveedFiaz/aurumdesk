@@ -42,7 +42,39 @@ function candle(a, b, now) {
     if (p < low) low = p;
   }
   const volume = Math.round(((end - a) / 60) * (400 + 300 * hash(a, 4242)) * (1 + (Math.abs(close - open) / open) * 300));
-  return { time: a, open, high, low, close, volume };
+  // Buyers dominate rising candles and sellers falling ones, with noise.
+  const share = Math.min(0.95, Math.max(0.05, 0.5 + 0.35 * Math.tanh(((close - open) / open) * 400) + 0.08 * hash(a, 777)));
+  return { time: a, open, high, low, close, volume, buyVolume: Math.round(volume * share) };
+}
+
+// Synthetic tape: one trade every 0.6 s, a few of them very large.
+function demoTrades(t, limit) {
+  const out = [];
+  for (let k = limit - 1; k >= 0; k--) {
+    const tk = Math.floor((t - k * 0.6) * 10) / 10;
+    const n = Math.round(tk * 10);
+    let size = Math.exp(hash(n, 31) * 1.6) * 0.6;
+    if (hash(n, 97) > 0.985) size *= 30;
+    const drift = demoPrice(tk) - demoPrice(tk - 30);
+    const side = drift + hash(n, 53) * 0.6 > 0 ? 'buy' : 'sell';
+    out.push({ time: tk, price: demoPrice(tk), size: Math.round(size * 1000) / 1000, side });
+  }
+  return out;
+}
+
+// Synthetic order book: thin levels every $0.10 with resting walls at round
+// numbers and at a few stable random prices.
+function demoBook(t, depth = 400) {
+  const mid = demoPrice(t);
+  const side = (dir) => Array.from({ length: depth }, (_, k) => {
+    const price = Math.round((mid + dir * (0.05 + k * 0.1)) * 100) / 100;
+    const key = Math.round(price * 10);
+    let size = 0.4 + Math.abs(hash(key, 11)) * 1.2;
+    if (key % 50 === 0) size *= 8;
+    if (hash(key, 19) > 0.97) size *= 12;
+    return { price, size: Math.round(size * 1000) / 1000 };
+  });
+  return { bids: side(-1), asks: side(1) };
 }
 
 const NATIVES = [
@@ -78,6 +110,14 @@ export function createDemo({ now = () => Date.now() / 1000 } = {}) {
         out.push(candle(a, shiftBucket(nat, a, 1), t));
       }
       return out;
+    },
+
+    async fetchTrades(limit = 1000) {
+      return demoTrades(now(), limit);
+    },
+
+    async fetchBook(limit = 400) {
+      return demoBook(now(), limit);
     },
 
     async fetchPrice() {

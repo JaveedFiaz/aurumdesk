@@ -5,17 +5,17 @@
 import { volumeProfile } from '/shared/analysis.js';
 
 export const COLORS = {
-  demand: [43, 181, 160],
-  supply: [240, 140, 46],
-  bullOB: [8, 153, 129],
-  bearOB: [242, 54, 69],
-  bull: '#089981',
-  bear: '#f23645',
-  sr: '#7f8ea3',
-  liq: '#a78bfa',
-  pd: '#c9b26b',
-  poc: '#d4a72c',
-  text: '#d1d4dc',
+  demand: [34, 211, 238],
+  supply: [167, 139, 250],
+  bullOB: [34, 227, 161],
+  bearOB: [255, 77, 109],
+  bull: '#22e3a1',
+  bear: '#ff4d6d',
+  sr: '#8a94a8',
+  liq: '#f5c451',
+  pd: '#ffe08a',
+  poc: '#f5c451',
+  text: '#e8ecf4',
 };
 
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -181,7 +181,7 @@ export class Overlay {
       if (yTop == null || yBot == null) continue;
       const bw = (vp.bins[b] / max) * maxW;
       const inVA = b >= vp.lowIdx && b <= vp.highIdx;
-      ctx.fillStyle = b === vp.poc ? 'rgba(212,167,44,0.55)' : inVA ? 'rgba(127,142,163,0.30)' : 'rgba(127,142,163,0.14)';
+      ctx.fillStyle = b === vp.poc ? 'rgba(245,196,81,0.55)' : inVA ? 'rgba(127,142,163,0.30)' : 'rgba(127,142,163,0.14)';
       ctx.fillRect(paneW - bw, yTop + 0.5, bw, Math.max(1, yBot - yTop - 1));
     }
     this.hline(paneW - maxW, paneW, Y(vp.pocPrice), COLORS.poc, [], 1);
@@ -225,7 +225,7 @@ export class Overlay {
     ctx.font = `${bold ? '600 ' : ''}11px system-ui, sans-serif`;
     const tw = ctx.measureText(text).width;
     const left = align === 'right' ? x - tw : align === 'center' ? x - tw / 2 : x;
-    ctx.fillStyle = 'rgba(19,23,34,0.78)';
+    ctx.fillStyle = 'rgba(5,7,13,0.82)';
     ctx.fillRect(left - 3, y - 7, tw + 6, 14);
     ctx.fillStyle = color;
     ctx.fillText(text, left, y + 0.5);

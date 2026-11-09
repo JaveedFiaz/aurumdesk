@@ -36,13 +36,15 @@ const css = fs.readFileSync(at('public/style.css'), 'utf8');
 const html = fs.readFileSync(at('public/index.html'), 'utf8');
 const body = html.slice(html.indexOf('<body>') + 6, html.indexOf('</body>'))
   .replace(/<script[^>]*><\/script>\s*/g, '')
-  .replace('<main class="main">', `<div class="preview-note">Preview on demo prices: the candles are generated, not real gold quotes. Run the downloadable version for live XAU/USD.</div>\n  <main class="main">`);
+  .replace('<main class="layout">', `<div class="preview-note">Preview on demo prices: candles, order flow and COT are generated, not real gold data. The auto-trader runs in paper mode in this browser. Run the server version for live XAU/USD.</div>\n  <main class="layout">`);
+const fonts = html.match(/<link rel="stylesheet" href="https:\/\/fonts[^>]+>/)?.[0] || '';
 
-const page = `<title>AurumDesk</title>
+const page = `<title>Aurum Pulse</title>
+${fonts}
 <style>
 ${css}
 :root { color-scheme: dark; }
-.preview-note { padding: 6px max(16px, env(safe-area-inset-right, 0px)) 6px max(16px, env(safe-area-inset-left, 0px)); font-size: 12px; color: var(--supply); background: var(--panel); border-bottom: 1px solid var(--line); }
+.preview-note { max-width: 1760px; margin: 12px auto 0; padding: 8px 24px; font-size: 12px; color: var(--gold-2); }
 </style>
 ${body.trim()}
 <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>

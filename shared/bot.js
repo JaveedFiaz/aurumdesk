@@ -4,6 +4,8 @@
 
 import { getCandles } from './candles.js';
 import { DEFAULT_RULES, STRATEGIES, buildContext, buildHtf, inSession, scanBar } from './strategies.js';
+import { GRADES, scoreSetup } from './confluence.js';
+import { cotAt } from './cot.js';
 
 export const BOT_TF = { id: 'M15', sec: 900 };
 export const BOT_HTF = { id: 'H1', sec: 3600 };
@@ -38,7 +40,8 @@ export function manage(t, bar, rules) {
 }
 
 // c: closed 15m candles, h: closed 1H candles (both ascending).
-export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATEGIES.map((s) => s.id) } = {}) {
+// cot: weekly COT metrics (optional); each setup sees only reports already published.
+export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATEGIES.map((s) => s.id), cot = null } = {}) {
   const trades = [];
   const live = new Map(); // strategy -> pending or open trade
   const perDay = new Map();
@@ -86,12 +89,33 @@ export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATE
     for (const s of scanBar(ctx, rules, todo)) {
       const key = `${s.strategy}:${dayKey(bar.time)}`;
       perDay.set(key, (perDay.get(key) || 0) + 1);
-      const t = { ...s, status: 'pending', signalTime: bar.time, plannedRisk: Math.abs(s.entry - s.stop) };
+      const conf = scoreSetup(s, ctx, cot ? cotAt(cot, closeAt) : null);
+      const t = { ...s, ...conf, status: 'pending', signalTime: bar.time, plannedRisk: Math.abs(s.entry - s.stop) };
       trades.push(t);
       live.set(s.strategy, t);
     }
   }
   return trades.filter((t) => t.status !== 'skipped');
+}
+
+function basic(done) {
+  const wins = done.filter((t) => t.r > 0).length;
+  const sumR = done.reduce((x, t) => x + t.r, 0);
+  const gross = done.filter((t) => t.r > 0).reduce((x, t) => x + t.r, 0);
+  const loss = -done.filter((t) => t.r <= 0).reduce((x, t) => x + t.r, 0);
+  return {
+    trades: done.length,
+    winRate: done.length ? wins / done.length : 0,
+    expR: done.length ? sumR / done.length : 0,
+    totalR: sumR,
+    pf: loss > 0 ? gross / loss : gross > 0 ? Infinity : 0,
+  };
+}
+
+// Measured results per confluence grade, over every backtested trade.
+export function gradeStats(trades) {
+  const done = trades.filter((t) => t.status === 'closed');
+  return GRADES.map((g) => ({ grade: g.id, min: g.min, ...basic(done.filter((t) => t.grade === g.id)) }));
 }
 
 export function summarize(trades, strategyId, splitTime) {
@@ -132,7 +156,7 @@ function dropForming(candles, sec, now) {
 }
 
 // Fetches history, backtests, ranks, and returns live setups from approved strategies.
-export async function runBot({ provider, now = Date.now() / 1000, history = 10000, rules = DEFAULT_RULES } = {}) {
+export async function runBot({ provider, now = Date.now() / 1000, history = 10000, rules = DEFAULT_RULES, cot = null } = {}) {
   const [c15, c60] = await Promise.all([
     getCandles(provider, BOT_TF.id, history, { maxCandles: history + 100 }),
     getCandles(provider, BOT_HTF.id, Math.ceil(history / 4) + HTF_WINDOW, { maxCandles: Math.ceil(history / 4) + HTF_WINDOW + 100 }),
@@ -141,14 +165,21 @@ export async function runBot({ provider, now = Date.now() / 1000, history = 1000
   const h = dropForming(c60, BOT_HTF.sec, now);
   if (c.length < WARMUP + 50) throw new Error('Not enough 15m history for the trade finder');
 
-  const trades = backtest(c, h, { rules });
+  const trades = backtest(c, h, { rules, cot });
   const from = c[Math.min(WARMUP, c.length - 1)].time;
   const to = c[c.length - 1].time + BOT_TF.sec;
   const splitTime = to - (to - from) * APPROVAL.oosShare;
   const stats = STRATEGIES.map((s) => ({ ...summarize(trades, s.id, splitTime), name: s.name, desc: s.desc }))
     .sort((a, b) => (b.active - a.active) || (b.expR - a.expR));
   const active = new Set(stats.filter((s) => s.active).map((s) => s.id));
-  const strip = ({ plannedRisk, bars, ...t }) => ({ ...t, active: active.has(t.strategy) });
+  const grades = gradeStats(trades);
+  const byGrade = Object.fromEntries(grades.map((g) => [g.grade, g]));
+  const strip = ({ plannedRisk, bars, ...t }) => ({
+    ...t,
+    active: active.has(t.strategy),
+    // What this grade actually did in the backtest.
+    expected: byGrade[t.grade] ? { winRate: byGrade[t.grade].winRate, expR: byGrade[t.grade].expR, trades: byGrade[t.grade].trades } : null,
+  });
 
   return {
     provider: provider.label,
@@ -162,8 +193,13 @@ export async function runBot({ provider, now = Date.now() / 1000, history = 1000
     approval: APPROVAL,
     generatedAt: Math.floor(now),
     stats,
+    grades,
+    orderFlow: c.some((x) => x.buyVolume != null),
+    cot: !!cot,
     // Setups waiting for the next bar's open, and trades still running.
     signals: trades.filter((t) => t.status !== 'closed' && active.has(t.strategy)).map(strip),
+    // The same, from strategies that have not proven an edge: shown, never traded.
+    watch: trades.filter((t) => t.status !== 'closed' && !active.has(t.strategy)).map(strip),
     recent: trades.filter((t) => t.status === 'closed').slice(-40).map(strip),
   };
 }

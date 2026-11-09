@@ -17,3 +17,13 @@ export function createProvider(env = process.env) {
   if (name === 'demo') return createDemo();
   throw new Error(`Unknown PROVIDER "${name}". Use binance, oanda, twelvedata or demo.`);
 }
+
+// Order flow (taker volume, big trades, order book) needs an exchange feed.
+// Gold has none for free, so PAXG on Binance stands in unless the main feed has its own.
+export function createFlowProvider(env = process.env, main) {
+  if (main?.fetchTrades) return main;
+  const name = (env.FLOW_PROVIDER || 'binance').toLowerCase();
+  if (name === 'none') return null;
+  if (name === 'binance') return createBinance({ base: env.BINANCE_BASE || undefined, symbol: env.BINANCE_SYMBOL || undefined });
+  throw new Error(`Unknown FLOW_PROVIDER "${name}". Use binance or none.`);
+}
