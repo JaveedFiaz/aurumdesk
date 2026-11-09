@@ -7,15 +7,15 @@ import { volumeProfile } from '/shared/analysis.js';
 export const COLORS = {
   demand: [43, 181, 160],
   supply: [240, 140, 46],
-  bullOB: [38, 166, 154],
-  bearOB: [239, 83, 80],
-  bull: '#26a69a',
-  bear: '#ef5350',
+  bullOB: [8, 153, 129],
+  bearOB: [242, 54, 69],
+  bull: '#089981',
+  bear: '#f23645',
   sr: '#7f8ea3',
   liq: '#a78bfa',
   pd: '#c9b26b',
   poc: '#d4a72c',
-  text: '#e6e9ee',
+  text: '#d1d4dc',
 };
 
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -225,7 +225,7 @@ export class Overlay {
     ctx.font = `${bold ? '600 ' : ''}11px system-ui, sans-serif`;
     const tw = ctx.measureText(text).width;
     const left = align === 'right' ? x - tw : align === 'center' ? x - tw / 2 : x;
-    ctx.fillStyle = 'rgba(11,15,20,0.72)';
+    ctx.fillStyle = 'rgba(19,23,34,0.78)';
     ctx.fillRect(left - 3, y - 7, tw + 6, 14);
     ctx.fillStyle = color;
     ctx.fillText(text, left, y + 0.5);

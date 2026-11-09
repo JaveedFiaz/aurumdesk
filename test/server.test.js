@@ -4,7 +4,40 @@ import { createApp, getCandles } from '../server/index.js';
 import { createDemo } from '../server/providers/demo.js';
 import { createBinance } from '../server/providers/binance.js';
 import { parseTime } from '../server/providers/twelvedata.js';
+import { createOanda } from '../server/providers/oanda.js';
 import { TIMEFRAMES, TF, bucketStart } from '../shared/timeframes.js';
+
+test('oanda candles page backwards, parse mid prices and send the token', async () => {
+  const calls = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, auth: opts.headers.Authorization });
+    const q = new URL(url).searchParams;
+    const count = +q.get('count');
+    // OANDA's `to` is inclusive here on purpose, to prove duplicates are dropped.
+    const last = q.get('to') ? +q.get('to') : 1_700_000_000;
+    const candles = Array.from({ length: count }, (_, k) => {
+      const t = last - (count - 1 - k) * 900;
+      return { time: `${t}.000000000`, volume: 7, complete: true, mid: { o: '2400.10', h: '2401.00', l: '2399.00', c: '2400.50' } };
+    });
+    return { ok: true, json: async () => ({ candles }) };
+  };
+  try {
+    const p = createOanda({ apiKey: 'test-token' });
+    const c = await p.fetchCandles('M15', 7000);
+    assert.equal(calls.length, 3); // 5000 + 1999 new, then a page holding only the duplicate stops it
+    assert.equal(calls[0].auth, 'Bearer test-token');
+    assert.ok(calls[0].url.startsWith('https://api-fxpractice.oanda.com/v3/instruments/XAU_USD/candles?price=M&granularity=M15&count=5000'));
+    assert.ok(calls[0].url.includes('dailyAlignment=0&alignmentTimezone=UTC'));
+    assert.equal(c.length, 6999); // the overlapping candle is not duplicated
+    assert.deepEqual(c[c.length - 1], { time: 1_700_000_000, open: 2400.1, high: 2401, low: 2399, close: 2400.5, volume: 7 });
+    for (let i = 1; i < c.length; i++) assert.equal(c[i].time - c[i - 1].time, 900);
+    assert.equal(await p.fetchPrice(), 2400.5);
+  } finally {
+    globalThis.fetch = orig;
+  }
+  assert.throws(() => createOanda({}), /OANDA_API_KEY/);
+});
 
 test('every timeframe builds from the demo provider with valid, ordered candles', async () => {
   const provider = createDemo();

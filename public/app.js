@@ -57,6 +57,8 @@ const state = {
   alertedZones: new Set(),
   bot: null,
   seenSignals: null,
+  view: store.get('view', 'desk') === 'tv' ? 'tv' : 'desk',
+  cfg: {},
 };
 
 // ---- Chart ----------------------------------------------------------------
@@ -74,19 +76,23 @@ function safeLocale() {
 const chartEl = $('chart');
 const chart = LC.createChart(chartEl, {
   autoSize: true,
-  layout: { background: { type: 'solid', color: '#0b0f14' }, textColor: '#8b95a3', fontFamily: 'system-ui, sans-serif' },
-  grid: { vertLines: { color: '#151b23' }, horzLines: { color: '#151b23' } },
-  rightPriceScale: { borderColor: '#222a35' },
-  timeScale: { borderColor: '#222a35', timeVisible: true, secondsVisible: false, rightOffset: 8 },
-  crosshair: { mode: LC.CrosshairMode.Normal },
+  layout: { background: { type: 'solid', color: '#131722' }, textColor: '#b2b5be', fontFamily: '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif' },
+  grid: { vertLines: { color: 'rgba(42,46,57,0.5)' }, horzLines: { color: 'rgba(42,46,57,0.5)' } },
+  rightPriceScale: { borderColor: '#2a2e39' },
+  timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: 8 },
+  crosshair: {
+    mode: LC.CrosshairMode.Normal,
+    vertLine: { color: '#758696', width: 1, style: LC.LineStyle.Dashed, labelBackgroundColor: '#2a2e39' },
+    horzLine: { color: '#758696', width: 1, style: LC.LineStyle.Dashed, labelBackgroundColor: '#2a2e39' },
+  },
   localization: { locale: safeLocale(), priceFormatter: (p) => p.toFixed(2) },
 });
 const candleSeries = chart.addCandlestickSeries({
-  upColor: '#26a69a',
-  downColor: '#ef5350',
+  upColor: '#089981',
+  downColor: '#f23645',
   borderVisible: false,
-  wickUpColor: '#26a69a',
-  wickDownColor: '#ef5350',
+  wickUpColor: '#089981',
+  wickDownColor: '#f23645',
   priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
 });
 candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.06, bottom: 0.2 } });
@@ -95,7 +101,7 @@ chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } })
 const vwapSeries = chart.addLineSeries({ color: '#f5c542', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 const overlay = new Overlay(chartEl.parentElement, $('overlay'), chart, candleSeries);
 
-const volBar = (c) => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(38,166,154,0.35)' : 'rgba(239,83,80,0.35)' });
+const volBar = (c) => ({ time: c.time, value: c.volume || 0, color: c.close >= c.open ? 'rgba(8,153,129,0.35)' : 'rgba(242,54,69,0.35)' });
 const bar = (c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close });
 
 // ---- Data -----------------------------------------------------------------
@@ -331,6 +337,8 @@ $('notify').addEventListener('change', async (e) => {
 function renderToolbar() {
   $('tfs').innerHTML = TIMEFRAMES.map((t) => `<button type="button" data-tf="${t.id}" aria-pressed="${t.id === state.tf}">${t.label}</button>`).join('');
   $('layers').innerHTML = LAYERS.map((l) => `<button type="button" data-layer="${l.id}" aria-pressed="${!!state.layers[l.id]}"><span class="sw" style="background:${l.color}"></span>${l.label}</button>`).join('');
+  $('layers').hidden = state.view === 'tv';
+  $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
 }
 
 $('tfs').addEventListener('click', (e) => {
@@ -342,6 +350,73 @@ $('tfs').addEventListener('click', (e) => {
   store.set('tf', tf);
   renderToolbar();
   load();
+  if (state.view === 'tv') showTradingView();
+});
+
+// ---- TradingView chart ----------------------------------------------------
+
+// TradingView's free Advanced Chart widget: their own prices, chart and drawing
+// tools. Timeframes TradingView's widget lacks map to the nearest one it has.
+const TV_INTERVAL = { M1: '1', M3: '3', M5: '5', M10: '15', M15: '15', M30: '30', M45: '45', H1: '60', H4: '240', D1: 'D', W1: 'W', MN: 'M', '3M': 'M', '6M': 'M' };
+
+function tvTimezone() {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return !tz || tz === 'UTC' ? 'Etc/UTC' : tz;
+  } catch {
+    return 'Etc/UTC';
+  }
+}
+
+function showTradingView() {
+  const el = $('tv');
+  el.innerHTML = '<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div></div>';
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  s.async = true;
+  s.text = JSON.stringify({
+    autosize: true,
+    symbol: state.cfg.tvSymbol || 'OANDA:XAUUSD',
+    interval: TV_INTERVAL[state.tf] || '15',
+    timezone: tvTimezone(),
+    theme: 'dark',
+    style: '1',
+    locale: 'en',
+    backgroundColor: '#131722',
+    gridColor: 'rgba(42, 46, 57, 0.5)',
+    allow_symbol_change: true,
+    hide_side_toolbar: false,
+    save_image: true,
+    calendar: false,
+    support_host: 'https://www.tradingview.com',
+  });
+  s.onerror = () => {
+    el.innerHTML = '<p class="banner">Could not load the TradingView chart. Check your connection or ad blocker, or switch back to the AurumDesk chart.</p>';
+  };
+  el.firstChild.appendChild(s);
+}
+
+function setView(view) {
+  state.view = view;
+  store.set('view', view);
+  const tv = view === 'tv';
+  $('tv').hidden = !tv;
+  $('chart').parentElement.classList.toggle('tv-on', tv);
+  if (tv) showTradingView();
+  else $('tv').innerHTML = '';
+  // The trade finder and market read always come from the server's feed.
+  const note = $('viewNote');
+  const sameFeed = state.cfg.provider === 'oanda';
+  note.hidden = !tv;
+  note.innerHTML = tv
+    ? `TradingView chart: <b>${esc(state.cfg.tvSymbol || 'OANDA:XAUUSD')}</b>. Zones and trade-finder setups in the side panel use <b>${esc(state.cfg.demo ? 'demo prices' : state.cfg.label || 'the server feed')}</b>${sameFeed ? ', the same OANDA prices.' : ', so levels can differ slightly. Set PROVIDER=oanda to match TradingView exactly.'}`
+    : '';
+  renderToolbar();
+}
+
+$('views').addEventListener('click', (e) => {
+  const view = e.target.closest('button')?.dataset.view;
+  if (view && view !== state.view) setView(view);
 });
 
 $('layers').addEventListener('click', (e) => {
@@ -375,8 +450,8 @@ function drawPlan(plan) {
   if (!plan || !$('showPlan').checked) return;
   const add = (price, color, title) => price && planLines.push(candleSeries.createPriceLine({ price, color, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title }));
   add(plan.entry, '#d4a72c', 'Entry');
-  add(plan.stop, '#ef5350', 'SL');
-  add(plan.target, '#26a69a', 'TP');
+  add(plan.stop, '#f23645', 'SL');
+  add(plan.target, '#089981', 'TP');
 }
 
 // ---- Trade finder ---------------------------------------------------------
@@ -481,7 +556,7 @@ function drawBotMarkers() {
     .map((t) => {
       const long = t.dir === 'bull';
       const res = t.status === 'closed' ? ` ${t.r > 0 ? '+' : ''}${t.r.toFixed(1)}R` : '';
-      return { time: t.entryTime, position: long ? 'belowBar' : 'aboveBar', color: long ? '#26a69a' : '#ef5350', shape: long ? 'arrowUp' : 'arrowDown', text: `${stratName(t.strategy)}${res}` };
+      return { time: t.entryTime, position: long ? 'belowBar' : 'aboveBar', color: long ? '#089981' : '#f23645', shape: long ? 'arrowUp' : 'arrowDown', text: `${stratName(t.strategy)}${res}` };
     })
     .sort((x, y) => x.time - y.time);
   candleSeries.setMarkers(markers);
@@ -496,6 +571,7 @@ async function boot() {
   $('showPlan').addEventListener('change', recalc);
   try {
     const cfg = await feed.config();
+    state.cfg = cfg;
     const src = $('source');
     src.textContent = cfg.demo ? 'DEMO DATA' : cfg.label;
     src.title = cfg.note;
@@ -503,6 +579,7 @@ async function boot() {
   } catch (e) {
     showBanner(`Server not reachable: ${e.message}`);
   }
+  if (state.view === 'tv') setView('tv');
   await load();
   loadDayOpen();
   setInterval(loadDayOpen, 5 * 60000);

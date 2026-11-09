@@ -38,6 +38,7 @@ Set `PROVIDER` in `.env`:
 | Provider | What you get | Key |
 |---|---|---|
 | `binance` (default) | PAXG/USDT from Binance's public market-data API. PAXG is a token backed by physical gold and tracks spot closely. It trades 24/7, so weekend candles appear. | None |
+| `oanda` | **The same prices as TradingView's `OANDA:XAUUSD` chart.** Spot XAU/USD from OANDA's v20 API. A free practice account works: sign up at oanda.com, then go to *Manage API Access* and generate a token. Set `OANDA_ENV=live` if you use a live-account token. | `OANDA_API_KEY` |
 | `twelvedata` | Real spot XAU/USD. The free plan (8 req/min, 800/day) is too small for live use; use a paid plan or raise `POLL_MS`. | `TWELVEDATA_API_KEY` |
 | `demo` | Synthetic prices for testing. Not market data. | None |
 
@@ -45,6 +46,17 @@ Timeframes a provider doesn't offer natively (10m, 45m, 3M, 6M…) are built by
 the server from smaller candles. To add your broker's feed, copy
 `server/providers/twelvedata.js`: a provider only needs `natives`,
 `fetchCandles(interval, limit)` and `fetchPrice()`.
+
+## TradingView
+
+The chart uses TradingView's dark theme colours. The **AurumDesk / TradingView**
+switch in the toolbar swaps in TradingView's own free chart widget (`OANDA:XAUUSD`
+by default; change it with `TV_SYMBOL`). That view has TradingView's live prices,
+indicators and drawing tools. The side panel keeps working in both views.
+
+TradingView has no data API that apps may use, so zones and trade-finder setups
+always come from your `PROVIDER`. Use `PROVIDER=oanda` to get the exact prices
+TradingView's OANDA chart shows.
 
 ## What the tools do
 

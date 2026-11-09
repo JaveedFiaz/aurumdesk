@@ -1,17 +1,18 @@
 :root {
-  --bg: #0b0f14;
-  --panel: #11161d;
-  --panel-2: #161c25;
-  --line: #222a35;
-  --text: #e6e9ee;
-  --muted: #8b95a3;
+  --bg: #131722;
+  --panel: #131722;
+  --panel-2: #1e222d;
+  --line: #2a2e39;
+  --text: #d1d4dc;
+  --muted: #787b86;
   --gold: #d4a72c;
-  --up: #26a69a;
-  --down: #ef5350;
+  --up: #089981;
+  --down: #f23645;
   --demand: #2bb5a0;
   --supply: #f08c2e;
   --liq: #a78bfa;
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
+  --accent: #2962ff;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -80,7 +81,7 @@ body {
   white-space: nowrap;
 }
 .seg button:hover, .chips button:hover { color: var(--text); background: var(--panel-2); }
-.seg button[aria-pressed="true"] { color: #14110a; background: var(--gold); font-weight: 600; }
+.seg button[aria-pressed="true"] { color: #fff; background: var(--accent); font-weight: 600; }
 .chips button { border-color: var(--line); }
 .chips button[aria-pressed="true"] { color: var(--text); border-color: var(--muted); background: var(--panel-2); }
 .chips button .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
@@ -128,7 +129,7 @@ body {
   width: 100%; font: 13px var(--mono); color: var(--text);
   background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
 }
-.calc input:focus { outline: 1px solid var(--gold); border-color: var(--gold); }
+.calc input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 .calc-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .calc button { border-color: var(--line); color: var(--text); }
 .calc .read { grid-column: 1 / -1; margin-top: 4px; }
@@ -137,6 +138,15 @@ label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; co
 .alerts { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12px; max-height: 180px; overflow-y: auto; }
 .alerts li { display: flex; gap: 8px; }
 .alerts time { color: var(--muted); font-family: var(--mono); }
+
+.views { padding-right: 12px; border-right: 1px solid var(--line); }
+.chips[hidden] { display: none; }
+.tv { position: absolute; inset: 0; z-index: 2; background: var(--bg); }
+.tv[hidden], .view-note[hidden] { display: none; }
+.tv .tradingview-widget-container, .tv .tradingview-widget-container__widget { height: 100%; width: 100%; }
+.chart-wrap.tv-on #chart, .chart-wrap.tv-on #overlay { visibility: hidden; }
+.view-note { padding: 5px 16px; font-size: 12px; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--line); }
+.view-note b { color: var(--text); font-weight: 600; }
 
 .signals { display: grid; gap: 8px; margin-bottom: 10px; }
 .signal { border: 1px solid var(--line); border-left: 3px solid var(--muted); border-radius: 8px; padding: 8px 10px; background: var(--panel); font-size: 13px; }

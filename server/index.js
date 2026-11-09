@@ -48,7 +48,7 @@ function resolveStatic(urlPath) {
   return file.startsWith(root + path.sep) ? file : null;
 }
 
-export function createApp({ provider, pollMs = provider.pollMs || 1000, botHistory = 10000 }) {
+export function createApp({ provider, pollMs = provider.pollMs || 1000, botHistory = 10000, tvSymbol = 'OANDA:XAUUSD' }) {
   const cache = new Map();
   let bot = null;
 
@@ -104,6 +104,7 @@ export function createApp({ provider, pollMs = provider.pollMs || 1000, botHisto
           label: provider.label,
           note: provider.note,
           demo: !!provider.demo,
+          tvSymbol,
           timeframes: TIMEFRAMES.map((t) => t.id),
         });
       }
@@ -148,7 +149,8 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = +process.env.PORT || 3000;
   const pollMs = +process.env.POLL_MS || undefined;
   const botHistory = +process.env.BOT_HISTORY || undefined;
-  createApp({ provider, pollMs, botHistory }).listen(port, () => {
+  const tvSymbol = process.env.TV_SYMBOL || undefined;
+  createApp({ provider, pollMs, botHistory, tvSymbol }).listen(port, () => {
     console.log(`AurumDesk running at http://localhost:${port}  (data: ${provider.label})`);
   });
 }

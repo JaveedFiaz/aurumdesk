@@ -8,7 +8,7 @@ import { runBot } from '../shared/bot.js';
 const provider = createDemo();
 
 export const feed = {
-  config: async () => ({ provider: provider.name, label: provider.label, note: provider.note, demo: true }),
+  config: async () => ({ provider: provider.name, label: provider.label, note: provider.note, demo: true, tvSymbol: 'OANDA:XAUUSD' }),
   bot: () => runBot({ provider, history: 6000 }),
   candles: (tf, limit) => getCandles(provider, tf, limit),
   subscribe(onMessage) {

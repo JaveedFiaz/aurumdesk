@@ -22,14 +22,20 @@
   </header>
 
   <nav class="toolbar">
+    <div id="views" class="seg views" role="group" aria-label="Chart">
+      <button type="button" data-view="desk" title="AurumDesk chart with zones, structure and trade-finder markers">AurumDesk</button>
+      <button type="button" data-view="tv" title="TradingView's own chart, prices and drawing tools">TradingView</button>
+    </div>
     <div id="tfs" class="seg" role="group" aria-label="Timeframe"></div>
     <div id="layers" class="chips" role="group" aria-label="Chart layers"></div>
   </nav>
+  <div id="viewNote" class="view-note" hidden></div>
 
   <main class="main">
     <section class="chart-wrap">
       <div id="chart"></div>
       <canvas id="overlay"></canvas>
+      <div id="tv" class="tv" hidden></div>
       <div id="banner" class="banner" hidden></div>
       <div id="loading" class="loading">Loading chart…</div>
     </section>
