@@ -238,6 +238,13 @@ button, input, select { font: inherit; color: inherit; }
 .scan h3 { margin: 0; font-size: 15px; }
 .scan p { margin: 0; color: var(--muted); font-size: 12.5px; max-width: 36ch; }
 .others { display: grid; gap: 6px; }
+.waits { display: grid; gap: 6px; }
+.wait { display: grid; gap: 2px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass-2); font: 600 13px var(--mono); animation: slideIn .5s var(--ease) both; }
+.wait.bull { border-left: 3px solid var(--bull); }
+.wait.bull b { color: var(--bull); }
+.wait.bear { border-left: 3px solid var(--bear); }
+.wait.bear b { color: var(--bear); }
+.wait span { font: 500 11.5px var(--font); color: var(--muted); }
 .other { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 7px 10px; border-radius: 10px; background: var(--glass-2); border: 1px solid var(--line); cursor: pointer; transition: border-color .2s; }
 .other:hover { border-color: var(--line-2); }
 

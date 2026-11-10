@@ -4,6 +4,7 @@
 
 import { deltaRatio } from './flow.js';
 import { cotBias } from './cot.js';
+import { inKillzone } from './strategies.js';
 
 export const FACTORS = [
   { id: 'htf', label: '1H trend agrees', weight: 20 },
@@ -24,11 +25,6 @@ export const GRADES = [
 
 export const gradeOf = (score) => GRADES.find((g) => score >= g.min).id;
 
-// Hours (UTC) of the London open (07-10) and New York open (12:30-15:30).
-function killzone(t) {
-  const m = Math.floor((t % 86400) / 60);
-  return (m >= 420 && m < 600) || (m >= 750 && m < 930);
-}
 
 // Was liquidity on the opposite side taken in the last 20 bars and reclaimed?
 function swept(ctx, dir) {
@@ -89,7 +85,7 @@ export function scoreSetup(s, ctx, cot = null) {
   }
   const cb = cot ? cotBias(cot) : null;
   add('cot', cot ? cb === s.dir : null);
-  add('killzone', killzone(w[L].time));
+  add('killzone', inKillzone(w[L].time));
   add('room', room(ctx, s));
   const max = out.reduce((t, f) => t + f.weight, 0);
   const got = out.reduce((t, f) => t + (f.ok ? f.weight : 0), 0);

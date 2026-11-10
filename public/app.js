@@ -30,6 +30,7 @@ const store = {
 };
 
 const LAYERS = [
+  { id: 'signals', label: 'Signals & buy/sell areas', color: '#f5c451' },
   { id: 'structure', label: 'Structure', color: COLORS.bull },
   { id: 'ob', label: 'Order blocks', color: COLORS.bear },
   { id: 'zones', label: 'Supply/Demand', color: 'rgb(34,211,238)' },
@@ -40,7 +41,7 @@ const LAYERS = [
   { id: 'sr', label: 'S/R', color: COLORS.sr },
   { id: 'profile', label: 'Profile', color: COLORS.poc },
 ];
-const DEFAULT_LAYERS = { structure: true, ob: true, zones: true, htf: true, liq: true, walls: true, vwap: true, sr: false, profile: false, volume: true };
+const DEFAULT_LAYERS = { signals: true, structure: true, ob: true, zones: true, htf: true, liq: true, walls: true, vwap: true, sr: false, profile: false, volume: true };
 const HTF_OF = { M1: 'H1', M3: 'H1', M5: 'H1', M10: 'H4', M15: 'H1', M30: 'H4', M45: 'D1', H1: 'H4', H4: 'D1', D1: 'W1' };
 const CHART_TFS = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
 
@@ -168,7 +169,9 @@ function runAnalysis() {
 }
 
 function pushOverlay() {
-  overlay.update({ candles: state.candles, result: state.result, htf: state.htf, layers: state.layers });
+  const b = state.bot;
+  const trade = b ? { areas: b.areas, triggers: b.triggers, live: b.signals, history: b.recent.slice(-30) } : null;
+  overlay.update({ candles: state.candles, result: state.result, htf: state.htf, layers: state.layers, trade });
 }
 
 function renderBias() {
@@ -184,7 +187,8 @@ function renderBias() {
 // Bot entries on the trade finder's timeframe, labelled with grade and result.
 function drawMarkers() {
   const b = state.bot;
-  if (!b || state.tf !== b.tf) {
+  // With the signals layer on, trades are drawn as boxes instead of arrows.
+  if (!b || state.tf !== b.tf || state.layers.signals) {
     candleSeries.setMarkers([]);
     return;
   }
@@ -300,6 +304,7 @@ $('layers').addEventListener('click', (e) => {
   renderToolbar();
   if (id === 'vwap') vwapSeries.setData(state.layers.vwap ? vwap(state.candles, vwapAnchor(TF[state.tf])) : []);
   if (id === 'walls') drawWalls();
+  if (id === 'signals') drawMarkers();
   if (id === 'htf' && state.layers.htf && !state.htf) loadHTF(state.seq);
   pushOverlay();
 });
@@ -394,14 +399,21 @@ function renderHero() {
   if (!b) return;
   const { list, tradable } = candidates();
   const best = list[0];
-  const key = best ? `${sigId(best)}:${best.status}:${tradable}` : `none:${b.stats.some((s) => s.active)}`;
+  const key = best ? `${sigId(best)}:${best.status}:${tradable}` : `none:${b.stats.some((s) => s.active)}:${JSON.stringify([b.areas, b.triggers])}:${b.recent.length}`;
   if (key === state.heroKey) return;
   state.heroKey = key;
   if (!best) {
     const nextClose = (Math.floor(nowSec() / 900) + 1) * 900;
-    $('heroMeta').textContent = `next scan ${clock(nextClose)}`;
-    el.innerHTML = `<div class="scan"><div class="radar"></div><h3>Scanning ${b.stats.length} strategies</h3>
-      <p>${b.stats.some((s) => s.active) ? 'No setup meets the rules right now. Every closed 15m candle is checked.' : 'No strategy has proven an edge on recent data yet, so nothing is offered as a trade.'}</p></div>`;
+    $('heroMeta').textContent = `next check ${clock(nextClose)}`;
+    const waits = [
+      ...(b.areas || []).map((a) => `<div class="wait ${a.dir}"><b>${a.dir === 'bull' ? 'BUY' : 'SELL'} AREA</b> ${fmt(a.bottom)}–${fmt(a.top)}<span>${esc(a.kind)} retest · SL ${fmt(a.stop)} · TP ${fmt(a.target)}</span></div>`),
+      ...(b.triggers || []).map((g) => `<div class="wait ${g.dir}"><b>${g.dir === 'bull' ? 'BUY above' : 'SELL below'}</b> ${fmt(g.price)}<span>only on a high-volume breakout at the London/NY open</span></div>`),
+    ].join('');
+    const last = b.recent[b.recent.length - 1];
+    el.innerHTML = `<div class="scan"><div class="radar"></div><h3>Waiting for price</h3>
+      <p>${b.stats.some((s) => s.active) ? 'No signal right now. The strategies check every closed 15m candle and signal only at these levels:' : 'No strategy has proven an edge on the tested history yet, so nothing is signalled.'}</p></div>
+      ${waits ? `<div class="waits">${waits}</div>` : ''}
+      ${last ? `<div class="expect">Last signal: <b class="${last.dir}">${last.dir === 'bull' ? 'BUY' : 'SELL'}</b> ${esc(stratName(last.strategy))} at ${fmt(last.entry)}, ${ago(last.signalTime)}, closed <b class="${last.r > 0 ? 'bull' : 'bear'}">${signed(last.r)}R</b>.</div>` : ''}`;
     drawPlan(null);
     return;
   }
@@ -484,6 +496,7 @@ async function loadBot() {
   renderAccuracy();
   checkNewSignals();
   drawMarkers();
+  pushOverlay();
 }
 
 // ---- Big players (COT) -------------------------------------------------------------
