@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyze, atr, findSwings, liquidity, marketStructure, supplyDemand, volumeProfile, vwap } from '../shared/analysis.js';
-import { positionSize } from '../public/calculator.js';
+import { positionSize } from '../shared/risk.js';
 
 // Build candles from a list of closes; each candle opens at the previous close.
 function series(closes, wick = 0.2) {

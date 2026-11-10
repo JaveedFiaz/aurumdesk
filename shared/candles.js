@@ -3,13 +3,13 @@
 
 import { TF, aggregate, bucketStart, nominalSeconds, pickNative, sameInterval } from './timeframes.js';
 
-export async function getCandles(provider, tfId, limit) {
+export async function getCandles(provider, tfId, limit, { maxCandles = provider.maxCandles || 5000 } = {}) {
   const tf = TF[tfId];
   if (!tf) throw Object.assign(new Error(`Unknown timeframe ${tfId}`), { status: 400 });
   const native = pickNative(tf, provider.natives);
   const same = sameInterval(tf, native);
   const factor = same ? 1 : Math.ceil(nominalSeconds(tf) / nominalSeconds(native));
-  const raw = await provider.fetchCandles(native.id, Math.min(limit * factor + factor, provider.maxCandles || 5000));
+  const raw = await provider.fetchCandles(native.id, Math.min(limit * factor + factor, maxCandles));
   let out = raw;
   if (!same) {
     out = aggregate(raw, tf);

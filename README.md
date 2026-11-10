@@ -1,22 +1,93 @@
-# AurumDesk: XAU/USD gold terminal
+# Aurum Pulse: gold (XAU/USD) intelligence terminal
 
-![AurumDesk on the 15m chart](docs/screenshot.png)
+![Aurum Pulse on demo data](docs/screenshot.png)
 
-A self-hosted, full-screen gold chart with automatic price-action analysis:
-market structure (BOS/CHoCH), order blocks, scored supply and demand zones,
-higher-timeframe zones, support and resistance, liquidity pools and sweeps,
-previous-day high/low, VWAP and a volume profile. Fourteen timeframes, from 1m to 6M.
+A self-hosted gold terminal with an animated dashboard. It finds trade setups,
+grades how many independent signals agree with each one, shows what the big
+players and the order book are doing, and runs an auto-trader you fund with an
+amount of your choice. The auto-trader runs in paper mode today; a live broker
+plugs into the same engine later.
 
-All analysis runs on **closed candles only**, so a zone or break never appears
-and then disappears while a candle is still forming.
+## What's on screen
+
+| Panel | What it shows |
+|---|---|
+| **Chart** | Candles with market structure (BOS/CHoCH), order blocks, supply/demand and 1H zones, liquidity pools, order-book walls, VWAP and volume coloured by buyer/seller aggression. Switch to **TradingView** for their own chart (`OANDA:XAUUSD`). |
+| **Best setup** | The highest-graded live setup: direction, entry, stop, target, a 0–100 confluence ring, the checklist of what agrees, and how that grade actually performed in the backtest. |
+| **Auto-trader** | Enter an amount, risk per trade and accuracy mode, then press Start. It takes qualifying setups, sizes them, and manages stop and target on every tick. It shows equity, P&L, open trades and activity. |
+| **Big players** | CFTC Commitments of Traders for COMEX gold: hedge-fund and bank/producer net positions, weekly change, and a 3-year COT index gauge. |
+| **Order flow** | Buyer vs seller aggression on the live tape, delta per candle and cumulative delta (CVD). |
+| **Liquidity map** | Order-book ladder with walls highlighted, bid/ask imbalance, and the stop-loss liquidity above and below price (equal highs/lows, previous-day high/low, last liquidity grab). |
+| **Whale tape** | The biggest trades (top 2% by size) as they print, with buy/sell share. |
+| **Measured accuracy** | Win rate and average R for each grade (A/B/C) and each strategy, from the backtest. |
+
+## How setups are found and graded
+
+Five strategies scan the 15m chart, using the 1H chart for confirmation, during
+London and New York hours:
+
+| Strategy | Setup |
+|---|---|
+| **Zone retest** | 15m and 1H trends agree. The first pullback into a fresh order block or supply/demand zone closes with a rejection candle. |
+| **Sweep + CHoCH** | Price takes out a recent swing high or low, closes back inside, then breaks structure the other way. |
+| **PDH/PDL reject** | The day's first wick through the previous day's high or low closes back inside. |
+| **VWAP pullback** | With the trend, price holds the daily VWAP, tags it and closes back on the trend side. |
+| **1H zone reject** | The first touch of an untested 1H zone, rejected on 15m. |
+
+Each setup gets a **confluence score** (0–100) from the factors below. A factor
+whose data isn't available counts toward neither the points nor the maximum.
+
+| Factor | Points |
+|---|---|
+| 1H trend agrees | 20 |
+| Liquidity swept first | 15 |
+| Candle delta confirms (more market buying for a long) | 15 |
+| 15m structure agrees | 10 |
+| Cumulative delta rising with the trade | 10 |
+| Hedge funds adding in the trade's direction (COT) | 10 |
+| London or New York open | 10 |
+| Clear path to target | 10 |
+
+**Grade A** is 70+, **B** is 50–69, **C** is below 50.
+
+Every 15 minutes the server backtests all of this on about 100 days of history
+(next-open entries, stop-first when a candle hits both, $0.40/oz costs, 2R
+target). It reports the real win rate of each grade. A strategy is
+**Active**, meaning the auto-trader may take its setups, only if it has:
+
+- 20+ trades
+- profit factor ≥ 1.15
+- average ≥ +0.05R
+- a profit on the most recent 40% of the data
+
+Every decision uses only candles, and COT reports, that existed at that moment.
+A test checks that adding future candles never changes past signals.
+
+There is no fixed accuracy promise. The dashboard shows what each grade
+actually did, and **Highest accuracy** mode takes grade A only.
+
+## Auto-trader
+
+- **Settings:** amount ($100 to $10M), risk per trade (0.1–5%), accuracy mode (A only, A+B, or all), max open trades (1–5) and daily loss limit (0.5–20%).
+- **Position size:** risk % of balance ÷ stop distance, in 0.01 oz steps. 100 oz = 1 lot.
+- **Safety rules:**
+  - Skips a setup if price has moved so far that reward/risk drops below 1.5.
+  - Stops opening trades for the day once the daily loss limit is hit.
+  - Closes trades after 16 hours.
+- **Persistence:** the account is saved to `data/paper.json` and survives restarts. On Render's free plan the disk resets on each deploy.
+- **Uptime:** the server keeps polling prices while the auto-trader is on, even with no browser open. Render's free plan sleeps after 15 idle minutes, so use a paid instance (or your own machine) to keep it running.
+- **Access:** set `ADMIN_TOKEN` when the site is public, so only you can start, stop or change it.
+
+**Going live later:** orders go through a broker object (`paperBroker` in
+`shared/autotrader.js`). A live broker such as OANDA or MetaTrader implements
+the same `fill()` call and places real orders. Run paper mode first and compare
+its results with the backtest before risking money.
 
 ## Put it online
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/JaveedFiaz/aurumdesk)
 
-Click the button, sign in to Render (free), and press **Apply**. After a few minutes
-you get a public link like `https://aurumdesk.onrender.com`. On the free plan the
-site sleeps after 15 minutes without visitors and takes about a minute to wake.
+Click the button, sign in to Render, set `ADMIN_TOKEN`, and press **Apply**.
 
 ## Run it on your computer
 
@@ -24,59 +95,50 @@ Requires Node.js 20.12 or newer.
 
 ```bash
 npm install
-cp .env.example .env      # pick a data provider (default: Binance PAXG, no key)
+cp .env.example .env      # choose a price feed, set ADMIN_TOKEN
 npm start                 # http://localhost:3000
 ```
 
-Run `npm run demo` to try it offline with synthetic prices, and `npm test` to run the test suite.
-`npm run build:hosted` builds `dist/aurumdesk.html`, a single static page that runs on demo prices with no server.
+- `npm run demo`: run offline on synthetic data.
+- `npm test`: run the test suite.
+- `npm run backtest`: print the strategy ranking.
+- `npm run build:hosted`: build `dist/aurumdesk.html`, a static preview that runs entirely in the browser on demo data.
 
-## Data providers
+## Data sources
 
-Set `PROVIDER` in `.env`:
-
-| Provider | What you get | Key |
+| Setting | Source | Key |
 |---|---|---|
-| `binance` (default) | PAXG/USDT from Binance's public market-data API. PAXG is a token backed by physical gold and tracks spot closely. It trades 24/7, so weekend candles appear. | None |
-| `twelvedata` | Real spot XAU/USD. The free plan (8 req/min, 800/day) is too small for live use; use a paid plan or raise `POLL_MS`. | `TWELVEDATA_API_KEY` |
-| `demo` | Synthetic prices for testing. Not market data. | None |
-
-Timeframes a provider doesn't offer natively (10m, 45m, 3M, 6M…) are built by
-the server from smaller candles. To add your broker's feed, copy
-`server/providers/twelvedata.js`: a provider only needs `natives`,
-`fetchCandles(interval, limit)` and `fetchPrice()`.
-
-## What the tools do
-
-| Tool | Method |
-|---|---|
-| **Structure** | 5-bar fractal swings. A close beyond the latest swing high/low is a **BOS** with the trend, or a **CHoCH** against it. |
-| **Order blocks** | For each break, the last opposite-colour candle at the extreme of the leg. Removed once a candle closes through it. |
-| **Supply / Demand** | 1–3 small "base" candles followed by an impulse candle with a body ≥ 1.6× ATR. Score 0–100 = impulse strength (40) + freshness (30, falls with each revisit) + tight base (15) + formed with the trend (15). |
-| **HTF zones** (dashed) | Supply/demand from a higher timeframe (e.g. 4H on a 15m chart), projected down. |
-| **S / R** | Swing points within 0.35× ATR clustered together; at least 2 touches. |
-| **Liquidity** | Equal highs/lows (EQH/EQL) where stops cluster. "✕ grab" marks a wick through a pool that closed back inside. PDH/PDL on intraday charts. |
-| **VWAP** | Anchored daily below 4H, weekly on 4H, monthly on 1D. |
-| **Volume profile** | Volume by price over the visible candles, with POC and the 70% value area (VAH/VAL). |
-
-The side panel has a market summary, session clocks (DST-aware), a position-size
-calculator (100 oz per lot by default) that can draw entry/SL/TP on the chart,
-and in-page/browser alerts for new breaks, liquidity grabs and price entering zones scored 60+.
+| `PROVIDER=binance` (default) | PAXG/USDT, a token backed by physical gold that tracks spot closely and trades 24/7. | None |
+| `PROVIDER=oanda` | Spot XAU/USD from OANDA: the same prices as TradingView's `OANDA:XAUUSD`. A free practice account works (*Manage API Access → Generate token*). | `OANDA_API_KEY` |
+| `PROVIDER=twelvedata` | Spot XAU/USD (paid plan recommended). | `TWELVEDATA_API_KEY` |
+| `PROVIDER=demo` | Synthetic prices, order flow and COT. | None |
+| Order flow (`FLOW_PROVIDER`) | Spot gold has no free public order book, so taker volume, big trades and the order book come from PAXG on Binance. Prices are shifted by the PAXG–spot difference so they line up with the chart. Set `FLOW_PROVIDER=none` to turn it off. | None |
+| COT | CFTC public reporting API (legacy futures-only report, COMEX gold 088691), refreshed every 6 hours. | None |
 
 ## Project layout
 
 ```
-server/index.js          HTTP server: static files, /api/candles, /api/stream (SSE ticks)
-server/providers/        binance, twelvedata, demo
-shared/timeframes.js     timeframe definitions, bucketing, aggregation
-shared/analysis.js       the analysis engine (pure functions, used in the browser)
-public/                  UI: app.js, overlay.js (canvas drawings), sessions.js, calculator.js
+server/index.js          HTTP server and APIs: candles, bot, flow, cot, paper, stream
+server/providers/        binance, oanda, twelvedata, demo
+server/cot.js            CFTC fetcher
+server/paper.js          auto-trader with file storage
+shared/analysis.js       structure, order blocks, zones, liquidity, VWAP, profile
+shared/strategies.js     setup detection
+shared/confluence.js     confluence score and grades
+shared/flow.js           delta, whales, order-book walls
+shared/cot.js            COT parsing, index and bias
+shared/bot.js            backtester, grade accuracy, strategy approval, live setups
+shared/autotrader.js     auto-trader engine and paper broker
+public/                  the Aurum Pulse UI (app.js, ui.js, overlay.js, style.css)
 test/                    node:test suite
 ```
 
-The chart is [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache 2.0, attribution logo kept).
+The chart is [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)
+(Apache 2.0, attribution logo kept).
 
 ## Disclaimer
 
-Educational charting tool. It is not financial advice and does not give buy or
-sell signals. Prices are indicative and may differ from your broker.
+Analysis tool, not financial advice. Accuracy figures are measured on recent
+history and do not guarantee future results. Order flow comes from a gold-token
+market as a proxy for spot gold. Trading leveraged gold products can lose more
+than you invest.

@@ -15,3 +15,7 @@ services:
         value: binance
       - key: TWELVEDATA_API_KEY
         sync: false
+      - key: OANDA_API_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
