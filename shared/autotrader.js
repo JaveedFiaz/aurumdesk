@@ -24,7 +24,7 @@ const DEFAULTS = {
   startBalance: 10000,
   balance: 10000,
   riskPct: 1,
-  minGrade: 'A',
+  minGrade: 'C',
   maxOpen: 2,
   dailyLossPct: 3,
   maxHours: 16,

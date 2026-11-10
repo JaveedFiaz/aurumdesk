@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { backtest, manage, runBot, summarize } from '../shared/bot.js';
-import { DEFAULT_RULES, STRATEGIES, inSession } from '../shared/strategies.js';
+import { DEFAULT_RULES, STRATEGIES, STRATEGY_BY_ID, inSession } from '../shared/strategies.js';
 import { createDemo } from '../server/providers/demo.js';
 import { getCandles } from '../shared/candles.js';
 import { createApp } from '../server/index.js';
@@ -49,7 +49,7 @@ test('backtest never looks ahead: adding future candles does not change earlier 
   assert.deepEqual(full, early);
 });
 
-test('every trade has a stop on the right side and a 2R target', async () => {
+test('every trade has a stop on the right side and its strategy\'s R target', async () => {
   const p = createDemo({ now: () => NOW });
   const c = await getCandles(p, 'M15', 3000, { maxCandles: 3100 });
   const h = await getCandles(p, 'H1', 1100, { maxCandles: 1200 });
@@ -57,7 +57,7 @@ test('every trade has a stop on the right side and a 2R target', async () => {
   for (const t of trades) {
     const sign = t.dir === 'bull' ? 1 : -1;
     assert.ok(sign * (t.entry - t.stop) > 0, 'stop beyond entry');
-    assert.ok(Math.abs(Math.abs(t.target - t.entry) - 2 * Math.abs(t.entry - t.stop)) < 1e-6, '2R target');
+    assert.ok(Math.abs(Math.abs(t.target - t.entry) - STRATEGY_BY_ID[t.strategy].rr * Math.abs(t.entry - t.stop)) < 1e-6, `${t.strategy} target`);
     if (t.status === 'closed') assert.ok(t.exitTime >= t.entryTime);
   }
 });
@@ -88,4 +88,56 @@ test('HTTP API serves the trade finder', async (t) => {
   const j = await (await fetch(`http://127.0.0.1:${server.address().port}/api/bot`)).json();
   assert.equal(j.tf, 'M15');
   assert.equal(j.stats.length, STRATEGIES.length);
+});
+
+// A rally to 110, a pullback, then a high-volume close through 110 at the London open.
+function breakoutSeries() {
+  const pts = [100, 110, 104];
+  const closes = Array.from({ length: 20 }, (_, i) => 100 + (i % 2 ? 0.3 : -0.3));
+  for (let k = 1; k < pts.length; k++) for (let s = 1; s <= 12; s++) closes.push(pts[k - 1] + ((pts[k] - pts[k - 1]) * s) / 12);
+  const end = utc('2026-10-21T08:00:00');
+  const c = closes.map((close, i) => {
+    const open = i ? closes[i - 1] : close;
+    return { time: end - (closes.length - i) * 900, open, close, high: Math.max(open, close) + 0.2, low: Math.min(open, close) - 0.2, volume: 100, buyVolume: 50 };
+  });
+  c.push({ time: end, open: 104.2, close: 111.5, high: 111.7, low: 104.1, volume: 400, buyVolume: 320 });
+  return c;
+}
+
+test('volume breakout fires on a high-volume close through a fresh swing high at the open', async () => {
+  const { CHECKS, buildContext } = await import('../shared/strategies.js');
+  const c = breakoutSeries();
+  const sig = CHECKS.vol_breakout(buildContext(c, { trend: 'bull', zones: [] }));
+  assert.ok(sig, 'expected a breakout');
+  assert.equal(sig.dir, 'bull');
+  assert.ok(sig.stop < sig.entry);
+  assert.equal(CHECKS.vol_breakout(buildContext(c, { trend: 'bear', zones: [] })), null, '1H trend must agree');
+  const quiet = c.map((x, i) => (i === c.length - 1 ? { ...x, volume: 120, buyVolume: 90 } : x));
+  assert.equal(CHECKS.vol_breakout(buildContext(quiet, { trend: 'bull', zones: [] })), null, 'needs 2x volume');
+  const late = c.map((x) => ({ ...x, time: x.time + 4 * 3600 }));
+  assert.equal(CHECKS.vol_breakout(buildContext(late, { trend: 'bull', zones: [] })), null, 'only at the London/NY open');
+});
+
+test('buy/sell areas: breakout trigger above price in a 1H uptrend, with stop and target on every area', async () => {
+  const { tradeAreas, buildContext } = await import('../shared/strategies.js');
+  const c = breakoutSeries().slice(0, -1);
+  const { triggers, areas } = tradeAreas(buildContext(c, { trend: 'bull', zones: [] }));
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].dir, 'bull');
+  assert.ok(triggers[0].price > c[c.length - 1].close);
+  for (const a of areas) assert.ok(a.dir === 'bull' ? a.stop < a.bottom && a.target > a.top : a.stop > a.top && a.target < a.bottom);
+});
+
+test('runBot downloads history once, then only the latest candles', async () => {
+  const base = createDemo({ now: () => NOW });
+  const calls = [];
+  const provider = { ...base, fetchCandles: (iv, n) => { calls.push(n); return base.fetchCandles(iv, n); } };
+  const cache = {};
+  await runBot({ provider, now: NOW, history: 3000, cache });
+  const first = calls.reduce((s, n) => s + n, 0);
+  calls.length = 0;
+  const r = await runBot({ provider, now: NOW, history: 3000, cache });
+  assert.ok(calls.every((n) => n <= 600), `second run fetched ${calls}`);
+  assert.ok(first > 3000);
+  assert.ok(Array.isArray(r.areas) && Array.isArray(r.triggers));
 });

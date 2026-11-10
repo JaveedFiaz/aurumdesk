@@ -157,7 +157,65 @@ export class Overlay {
         }
       }
     }
+    if (layers.signals && d.trade) this.drawTrade(d.trade, candles, X, Y, right);
+
     ctx.restore();
+  }
+
+  // Trade-finder layer: where the strategies will buy or sell next (areas and
+  // breakout triggers), live signals as position boxes, and past signals with
+  // their result.
+  drawTrade(t, candles, X, Y, right) {
+    const idx = (time) => {
+      const i = lowerBound(candles, time + 1) - 1;
+      return i < 0 ? null : i;
+    };
+    const green = (a) => `rgba(34,227,161,${a})`;
+    const red = (a) => `rgba(255,77,109,${a})`;
+    const lastX = X(candles.length - 1);
+
+    for (const p of t.history || []) {
+      const i0 = idx(p.entryTime);
+      const i1 = idx(p.exitTime);
+      if (i0 == null || i1 == null) continue;
+      const x1 = X(i0);
+      let x2 = X(i1);
+      if (x1 == null || x2 == null || x2 < 0 || x1 > right) continue;
+      x2 = Math.max(x2, x1 + 6);
+      this.box(x1, x2, Y(p.entry), Y(p.target), green(0.1), green(0.35));
+      this.box(x1, x2, Y(p.entry), Y(p.stop), red(0.1), red(0.35));
+      const win = p.r > 0;
+      this.tag(`${win ? '+' : ''}${p.r.toFixed(1)}R`, x2 + 3, Y(win ? p.target : p.stop), win ? COLORS.bull : COLORS.bear, 'left', true);
+    }
+
+    for (const a of t.areas || []) {
+      const bull = a.dir === 'bull';
+      const i = idx(a.time);
+      const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
+      this.box(x1, right, Y(a.top), Y(a.bottom), bull ? green(0.16) : red(0.16), bull ? green(0.85) : red(0.85));
+      this.hline(x1, right, Y(a.stop), bull ? red(0.7) : green(0.7), [4, 4], 1);
+      this.tag(`${bull ? 'BUY' : 'SELL'} AREA · ${a.kind} retest · SL ${a.stop.toFixed(2)} · TP ${a.target.toFixed(2)}`, right - 6, Y(bull ? a.top : a.bottom) + (bull ? -9 : 9), bull ? COLORS.bull : COLORS.bear, 'right', true);
+    }
+
+    for (const g of t.triggers || []) {
+      const bull = g.dir === 'bull';
+      const i = idx(g.time);
+      const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
+      this.hline(x1, right, Y(g.price), bull ? green(0.9) : red(0.9), [8, 4], 1.5);
+      this.tag(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} · high-volume breakout`, right - 6, Y(g.price) + (bull ? -9 : 9), bull ? COLORS.bull : COLORS.bear, 'right', true);
+    }
+
+    for (const s of t.live || []) {
+      const bull = s.dir === 'bull';
+      const i = s.entryTime ? idx(s.entryTime) : candles.length - 1;
+      const x1 = (i == null ? null : X(i)) ?? lastX;
+      if (x1 == null) continue;
+      this.box(x1, right, Y(s.entry), Y(s.target), green(0.22), green(0.9));
+      this.box(x1, right, Y(s.entry), Y(s.stop), red(0.22), red(0.9));
+      this.hline(x1, right, Y(s.entry), '#f5c451', [], 2);
+      // Entry, stop and target prices are on the price axis; one label names the signal.
+      this.tag(`${bull ? '▲ BUY' : '▼ SELL'} SIGNAL · ${s.status === 'open' ? 'running' : 'new'}`, x1 - 6, Y(s.entry), '#ffe08a', 'right', true);
+    }
   }
 
   drawProfile(candles, range, paneW, Y) {

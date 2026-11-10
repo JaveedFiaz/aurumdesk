@@ -56,7 +56,7 @@ function resolveStatic(urlPath) {
 export function createApp({
   provider,
   pollMs = provider.pollMs || 1000,
-  botHistory = 10000,
+  botHistory = 70000,
   tvSymbol = 'OANDA:XAUUSD',
   flowProvider = provider.fetchTrades ? provider : null,
   cotSource = createCotSource({ demo: !!provider.demo }),
@@ -69,12 +69,13 @@ export function createApp({
   let timer = null;
   let lastTick = null;
   let flow = null;
+  const history = {};
 
   // The trade finder reruns once per closed 15m candle; every visitor shares the result.
   function botResult() {
     const bucket = Math.floor(Date.now() / 1000 / BOT_TF.sec);
     if (bot && bot.bucket === bucket) return bot.promise;
-    const promise = cotSource.get().then((cot) => runBot({ provider, history: botHistory, cot }));
+    const promise = cotSource.get().then((cot) => runBot({ provider, history: botHistory, cot, cache: history }));
     bot = { bucket, promise };
     promise.catch(() => {
       if (bot?.promise === promise) bot = null;

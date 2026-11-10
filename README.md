@@ -21,54 +21,56 @@ plugs into the same engine later.
 | **Whale tape** | The biggest trades (top 2% by size) as they print, with buy/sell share. |
 | **Measured accuracy** | Win rate and average R for each grade (A/B/C) and each strategy, from the backtest. |
 
-## How setups are found and graded
+## Strategies and signals
 
-Five strategies scan the 15m chart, using the 1H chart for confirmation, during
-London and New York hours:
+Only strategies that made money on **two years of real gold data**, in both the
+earlier 60% and the most recent 40% of the period, run live
+([full results](docs/backtest-results.md)):
 
-| Strategy | Setup |
-|---|---|
-| **Zone retest** | 15m and 1H trends agree. The first pullback into a fresh order block or supply/demand zone closes with a rejection candle. |
-| **Sweep + CHoCH** | Price takes out a recent swing high or low, closes back inside, then breaks structure the other way. |
-| **PDH/PDL reject** | The day's first wick through the previous day's high or low closes back inside. |
-| **VWAP pullback** | With the trend, price holds the daily VWAP, tags it and closes back on the trend side. |
-| **1H zone reject** | The first touch of an untested 1H zone, rejected on 15m. |
+| Strategy | Signal | Target | 2-year result |
+|---|---|---|---|
+| **Zone retest** | 15m and 1H trends agree. The first pullback into a fresh order block or supply/demand zone closes with a rejection candle. | 2R | 45 trades, 44% win, PF 1.58, +13.5R |
+| **Volume breakout** | During the London or New York open, a close through a fresh swing high or low on 2x+ average volume, with aggressive buying (selling) in the order flow and the 1H trend behind it. | 3R | 98 trades, 36% win, PF 1.41, +26.5R |
 
-Each setup gets a **confluence score** (0–100) from the factors below. A factor
-whose data isn't available counts toward neither the points nor the maximum.
+Together that is about 6 signals a month. Over two years they made +38R, with a
+worst drawdown of 9.5R and a longest losing streak of 7. Both stayed profitable
+at three times the trading cost, for longs and shorts, and in each third of the
+period (the first third only just).
 
-| Factor | Points |
-|---|---|
-| 1H trend agrees | 20 |
-| Liquidity swept first | 15 |
-| Candle delta confirms (more market buying for a long) | 15 |
-| 15m structure agrees | 10 |
-| Cumulative delta rising with the trade | 10 |
-| Hedge funds adding in the trade's direction (COT) | 10 |
-| London or New York open | 10 |
-| Clear path to target | 10 |
+Tested and retired, because they lost money or only worked in one half of the
+period: VWAP pullback, Sweep + CHoCH, S/R flip, Liquidity absorption,
+PDH/PDL reject and 1H zone reject. Re-test them with
+`npm run backtest -- --all`.
 
-**Grade A** is 70+, **B** is 50–69, **C** is below 50.
+**On the chart (the "Signals & buy/sell areas" layer):**
 
-Every 15 minutes the server backtests all of this on about 100 days of history
-(next-open entries, stop-first when a candle hits both, $0.40/oz costs, 2R
-target). It reports the real win rate of each grade. A strategy is
-**Active**, meaning the auto-trader may take its setups, only if it has:
+- **BUY / SELL AREA:** fresh zones in the trend direction where Zone retest will signal on the first touch, with stop and target.
+- **BUY above / SELL below:** the level that Volume breakout is watching.
+- **Live signals:** shown as position boxes (green to target, red to stop), with entry, SL and TP on the price axis.
+- **Past signals:** boxes from entry to exit, labelled with the result in R.
+
+New signals also appear in the **Best setup** panel, as a toast and a sound,
+and (if allowed) as a browser notification. When there is no signal, the panel
+lists the areas and levels the strategies are waiting for, and the last signal
+with its result.
+
+Every 15 minutes the server re-runs the 2-year backtest (it downloads the
+history once, then only new candles). A strategy keeps signalling only while it
+stays proven:
 
 - 20+ trades
 - profit factor ≥ 1.15
 - average ≥ +0.05R
-- a profit on the most recent 40% of the data
+- profitable on the most recent 40% of the period
 
-Every decision uses only candles, and COT reports, that existed at that moment.
-A test checks that adding future candles never changes past signals.
-
-There is no fixed accuracy promise. The dashboard shows what each grade
-actually did, and **Highest accuracy** mode takes grade A only.
+Each signal also gets a confluence score (A/B/C) from trend, liquidity sweep,
+candle delta, CVD, COT, session and room to target. On real data these factors
+did not consistently predict winners, so the auto-trader takes every signal
+from the proven strategies by default. The stricter A/B modes are optional.
 
 ## Auto-trader
 
-- **Settings:** amount ($100 to $10M), risk per trade (0.1–5%), accuracy mode (A only, A+B, or all), max open trades (1–5) and daily loss limit (0.5–20%).
+- **Settings:** amount ($100 to $10M), risk per trade (0.1–5%), accuracy mode (every signal from the proven strategies by default, or A+B / A only), max open trades (1–5) and daily loss limit (0.5–20%).
 - **Position size:** risk % of balance ÷ stop distance, in 0.01 oz steps. 100 oz = 1 lot.
 - **Safety rules:**
   - Skips a setup if price has moved so far that reward/risk drops below 1.5.
