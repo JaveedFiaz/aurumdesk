@@ -10,7 +10,8 @@
 
 const IV = { M1: '1m', M5: '5m', M15: '15m', H1: '1h' };
 const SEC = { M1: 60, M5: 300, M15: 900, H1: 3600 };
-const KEEP = 3 * 1440; // three days of 1-minute spot candles
+const KEEP = 3 * 1440;
+const r2 = (x) => Math.round(x * 100) / 100; // three days of 1-minute spot candles
 
 export function parseFutures(rows) {
   return (rows || []).map((k) => ({
@@ -91,7 +92,7 @@ export function createGoldCandles({ fetchImpl = (...a) => fetch(...a), base = 'h
         return {
           source: `Binance ${symbol} perpetual`,
           shift,
-          candles: f.map((c) => ({ ...c, open: c.open + shift, high: c.high + shift, low: c.low + shift, close: c.close + shift })),
+          candles: f.map((c) => ({ ...c, open: r2(c.open + shift), high: r2(c.high + shift), low: r2(c.low + shift), close: r2(c.close + shift) })),
         };
       }
       // Drop the first bucket: it may only hold part of its period.

@@ -810,8 +810,7 @@ function renderGuide() {
   const waits = plays.flatMap(([tf, t]) => [
     ...t.areas.map((a) => sh(a, k)).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })),
     ...t.triggers.map((g) => sh(g, k)).map((g) => ({ tf, dir: g.dir, text: `${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}`, at: g.price })),
-    ...(tf === state.tf ? withZones([]).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })) : []),
-  ]).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
+  ]).concat(withZones([]).filter((a) => a.watch).map((a) => ({ tf: state.tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 }))).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
   setGuide(el, `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
     ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`, 'guide');
 }
