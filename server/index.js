@@ -8,7 +8,7 @@ import { Worker } from 'node:worker_threads';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { TF, TIMEFRAMES } from '../shared/timeframes.js';
+import { TF, TIMEFRAMES, bucketStart } from '../shared/timeframes.js';
 import { getCandles } from '../shared/candles.js';
 import { analyze, dropFormingCandle } from '../shared/bot.js';
 import { MARKETS, PLAY_TFS } from '../shared/markets.js';
@@ -92,6 +92,7 @@ export function createApp({
   newsPause = false,
   adminToken = '',
   autoStart = true,
+  log = () => {},
 }) {
   const clients = new Set();
   const candleCache = new Map();
@@ -108,6 +109,7 @@ export function createApp({
     plays: Object.fromEntries(PLAY_TFS.filter((tf) => m.plays[tf]).map((tf) => [tf, { full: null, live: null, error: null, testing: false, testedAt: 0, lastBar: 0 }])),
     ready: false,
     lastRefresh: 0,
+    fetched: {}, // tf id -> time of the newest candle the feed has confirmed
     tape: [], // recent trades from the live stream
     streamAt: 0,
     lastPush: 0,
@@ -149,8 +151,11 @@ export function createApp({
       st.live = null;
       st.error = null;
       st.testedAt = Date.now();
+      log(`${x.m.label} ${tf} tested: ${st.full.stats.map((z) => `${z.id} ${z.trades} trades PF ${Number.isFinite(z.pf) ? z.pf.toFixed(2) : 'inf'} ${z.active ? 'TRADING' : 'watch'}`).join(', ')}`);
     } catch (e) {
       st.error = e.message;
+      st.testedAt = Date.now() - retestMs + 10 * 60000; // try again in 10 minutes
+      log(`${x.m.label} ${tf} backtest failed: ${e.message}`);
     } finally {
       st.testing = false;
     }
@@ -168,7 +173,8 @@ export function createApp({
     try {
       st.live = analyze(c, closedOf(x, play.htf), playOpts(x, tf, { now: Date.now() / 1000, prior: st.full }));
       const pause = newsPause ? news.pauseReason() : null;
-      paper.onSignals(st.live.signals, prices[x.m.id], { id: x.m.id, label: x.m.label, costBps: x.m.costBps, step: x.m.id === 'btc' ? 0.0001 : 0.01 }, { pause });
+      for (const sg of st.live.signals) if (sg.status === 'pending') log(`${x.m.label} ${tf} setup: ${sg.dir === 'bull' ? 'BUY' : 'SELL'} ${sg.strategy} entry ${sg.entry.toFixed(2)} stop ${sg.stop.toFixed(2)} target ${sg.target.toFixed(2)}`);
+      paper.onSignals(st.live.signals, prices[x.m.id] ?? c.at(-1)?.close, { id: x.m.id, label: x.m.label, costBps: x.m.costBps, step: x.m.id === 'btc' ? 0.0001 : 0.01 }, { pause });
     } catch (e) {
       st.error = e.message;
     }
@@ -185,10 +191,12 @@ export function createApp({
       const asHtf = Math.max(0, ...Object.keys(x.plays).filter((p) => x.m.plays[p].htf === tf).map((p) => Math.ceil((need(x, p) * TF[p].sec) / TF[tf].sec) + 320));
       const want = Math.max(n, asHtf);
       x.hist[tf] = await getCandles(x.provider, tf, want, { maxCandles: want + 100 });
+      x.fetched[tf] = x.hist[tf].at(-1)?.time ?? 0;
       x.want = { ...x.want, [tf]: want };
       if (closed) return;
     }
     x.ready = true;
+    log(`${x.m.label} history loaded: ${Object.entries(x.hist).map(([k, v]) => `${k} ${v.length}`).join(', ')}`);
     // Shortest history first, so the 15m results appear quickly.
     for (const tf of ['M15', 'M5', 'M1'].filter((t) => x.plays[t])) {
       if (closed) return;
@@ -200,17 +208,45 @@ export function createApp({
   async function refreshCandles(x) {
     const now = Date.now() / 1000;
     for (const tf of Object.keys(x.hist)) {
-      const prev = x.hist[tf];
-      const last = prev.at(-1)?.time ?? 0;
+      const last = x.fetched[tf] ?? 0;
       const sec = TF[tf].sec;
-      if (now < last + sec + 1) continue; // the forming candle has not closed yet
+      if (now < last + sec + 1) continue; // the candle the feed last confirmed is still forming
       const missing = Math.ceil((now - last) / sec) + 3;
       const fresh = await getCandles(x.provider, tf, Math.min(1000, Math.max(5, missing)));
-      x.hist[tf] = mergeCandles(prev, fresh, x.want[tf]);
+      if (!fresh.length) continue;
+      // Replaces the candles built from ticks since the last fetch with the feed's own.
+      x.hist[tf] = mergeCandles(x.hist[tf], fresh, x.want[tf]);
+      x.fetched[tf] = fresh.at(-1).time;
     }
     for (const tf of Object.keys(x.plays)) {
       liveScan(x, tf);
       if (Date.now() - x.plays[tf].testedAt > retestMs && !x.plays[tf].testing) fullTest(x, tf).then(() => liveScan(x, tf));
+    }
+  }
+
+  // Keeps the newest candle of every loaded timeframe current between fetches,
+  // so charts and order flow served from memory are never stale.
+  function tickCandles(x, p, t = null) {
+    if (!x.ready) return;
+    const now = Math.floor(Date.now() / 1000);
+    const vol = t && x.flow === x.provider ? t.size : 0;
+    for (const tf of Object.keys(x.hist)) {
+      const list = x.hist[tf];
+      const c = list[list.length - 1];
+      if (!c) continue;
+      const b = bucketStart(TF[tf], now);
+      if (b > c.time) {
+        list.push({ time: b, open: p, high: p, low: p, close: p, volume: vol, ...(c.buyVolume != null ? { buyVolume: t && t.side === 'buy' ? vol : 0 } : {}) });
+        if (list.length > x.want[tf] + 50) list.splice(0, list.length - x.want[tf]);
+      } else if (b === c.time) {
+        if (p > c.high) c.high = p;
+        if (p < c.low) c.low = p;
+        c.close = p;
+        if (vol) {
+          c.volume += vol;
+          if (c.buyVolume != null && t.side === 'buy') c.buyVolume += vol;
+        }
+      }
     }
   }
 
@@ -230,30 +266,39 @@ export function createApp({
     const src = markets.filter((x) => x.flow && x.flow.stream && x.flow.symbol);
     if (!src.length) return;
     const bySymbol = Object.fromEntries(src.map((x) => [x.flow.symbol.toUpperCase(), x]));
+    const onState = (on) => log(`Trade stream ${on ? 'connected' : 'disconnected'}`);
     stopStream = src[0].flow.stream(Object.keys(bySymbol), (symbol, t) => {
       const x = bySymbol[symbol];
       if (!x) return;
       x.streamAt = Date.now();
       x.tape.push(t);
       if (x.tape.length > 1500) x.tape.splice(0, x.tape.length - 1000);
+      if (x.flow === x.provider) tickCandles(x, t.price, t);
       // The stream is the price feed only when prices and flow come from the same market.
       if (x.flow === x.provider && Date.now() - x.lastPush >= 500) {
         x.lastPush = Date.now();
         setPrice(x, t.price);
       }
-    });
+    }, onState);
   }
 
   async function loop(x) {
     while (!closed) {
       try {
-        if (!(streaming(x) && x.flow === x.provider)) setPrice(x, await x.provider.fetchPrice());
+        if (!(streaming(x) && x.flow === x.provider)) {
+          const p = await x.provider.fetchPrice();
+          setPrice(x, p);
+          if (Number.isFinite(p)) tickCandles(x, p);
+        }
+        x.err = null;
         if (x.ready && Date.now() - x.lastRefresh > 5000) {
           x.lastRefresh = Date.now();
           await refreshCandles(x);
         }
       } catch (e) {
         broadcast({ m: x.m.id, error: e.message });
+        if (x.err !== e.message) log(`${x.m.label} feed error: ${e.message}`);
+        x.err = e.message;
       }
       await sleep(x.provider.pollMs && x.provider.pollMs > pollMs ? x.provider.pollMs : pollMs);
     }
@@ -268,7 +313,10 @@ export function createApp({
       // A failed history load is retried every minute.
       (async () => {
         while (!closed && !x.ready) {
-          await loadMarket(x).catch((e) => { for (const st of Object.values(x.plays)) st.error = e.message; });
+          await loadMarket(x).catch((e) => {
+            for (const st of Object.values(x.plays)) st.error = e.message;
+            log(`${x.m.label} history load failed: ${e.message}`);
+          });
           if (!x.ready) await sleep(60000);
         }
       })();
@@ -280,7 +328,7 @@ export function createApp({
     const tfs = {};
     for (const [tf, st] of Object.entries(x.plays)) {
       const r = st.live || st.full;
-      tfs[tf] = r ? { ...r, testing: st.testing } : { pending: true, error: st.error, strategies: x.m.plays[tf].strategies.map((s) => s.id) };
+      tfs[tf] = r ? { ...r, recent: r.recent.slice(-40).map(({ factors, expected, ...t }) => t), testing: st.testing } : { pending: true, error: st.error, strategies: x.m.plays[tf].strategies.map((s) => s.id) };
     }
     return { market: x.m.id, price: prices[x.m.id] ?? null, tfs };
   }
@@ -459,6 +507,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     newsPause: process.env.NEWS_PAUSE === '1',
     paper,
     adminToken,
+    log: (msg) => console.log(`${new Date().toISOString().slice(11, 19)} ${msg}`),
   }).listen(port, () => {
     console.log(`Pulse Scalper running at http://localhost:${port}  (gold: ${providers.gold.label}, btc: ${providers.btc.label})`);
     if (!adminToken) console.log('Tip: set ADMIN_TOKEN so only you can change the auto-trader when this is online.');

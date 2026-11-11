@@ -53,7 +53,8 @@ export function parseCalendar(rows, now) {
     .sort((a, b) => a.time - b.time);
 }
 
-export function createNews({ fetchImpl = fetch, now = () => Date.now() / 1000, pollMs = 4000, demo = false } = {}) {
+export function createNews({ fetchImpl = fetch, now = () => Date.now() / 1000, pollMs = 5000, demo = false } = {}) {
+  const feeds = FEEDS.map((f) => ({ ...f }));
   const seen = new Map(); // title -> item
   let events = [];
   let timer = null;
@@ -62,8 +63,17 @@ export function createNews({ fetchImpl = fetch, now = () => Date.now() / 1000, p
   let lastOk = 0;
 
   async function pollFeed(feed) {
-    const res = await fetchImpl(feed.url, { headers: { 'User-Agent': 'AurumPulse/1.0 (+news reader)', Accept: 'application/rss+xml, application/xml, text/xml' }, signal: AbortSignal.timeout(8000) });
+    // Conditional request: an unchanged feed answers 304 with no body.
+    const cond = feed.etag ? { 'If-None-Match': feed.etag } : feed.modified ? { 'If-Modified-Since': feed.modified } : {};
+    const res = await fetchImpl(feed.url, { headers: { 'User-Agent': 'AurumPulse/1.0 (+news reader)', Accept: 'application/rss+xml, application/xml, text/xml', ...cond }, signal: AbortSignal.timeout(8000) });
+    if (res.status === 304) {
+      lastOk = now();
+      return;
+    }
+    if (res.status === 429 || res.status === 403) feed.skipUntil = Date.now() + 5 * 60000; // asked to slow down
     if (!res.ok) throw new Error(`${feed.source} ${res.status}`);
+    feed.etag = res.headers?.get?.('etag') || null;
+    feed.modified = res.headers?.get?.('last-modified') || null;
     const first = lastOk === 0;
     for (const it of parseRss(await res.text(), feed.source)) {
       const key = it.title.toLowerCase();
@@ -79,8 +89,8 @@ export function createNews({ fetchImpl = fetch, now = () => Date.now() / 1000, p
 
   async function tick() {
     if (demo) return;
-    const feed = FEEDS[k++ % FEEDS.length];
-    await pollFeed(feed).catch(() => {});
+    const feed = feeds[k++ % feeds.length];
+    if (!(feed.skipUntil > Date.now())) await pollFeed(feed).catch(() => {});
     if (Date.now() - calAt > 30 * 60000) {
       calAt = Date.now();
       try {
@@ -94,7 +104,7 @@ export function createNews({ fetchImpl = fetch, now = () => Date.now() / 1000, p
     start() {
       if (timer || demo) return;
       // One feed per tick, so each feed is re-read every pollMs × feeds.
-      const loop = () => tick().finally(() => { timer = setTimeout(loop, pollMs / FEEDS.length); timer.unref?.(); });
+      const loop = () => tick().finally(() => { timer = setTimeout(loop, pollMs / feeds.length); timer.unref?.(); });
       loop();
     },
     stop: () => clearTimeout(timer),

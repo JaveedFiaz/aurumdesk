@@ -78,7 +78,7 @@ smaller instances.
 
 | What | Source |
 |---|---|
-| Gold prices | PAXG/USDT on Binance by default. Set `PROVIDER=oanda` with a free OANDA practice key for spot XAU/USD, the same prices as TradingView's `OANDA:XAUUSD`. |
+| Gold prices | PAXG/USDT on Binance by default. Set `PROVIDER=oanda` with a free OANDA practice key for spot XAU/USD, the same prices as TradingView's `OANDA:XAUUSD`. OANDA candles carry no buy/sell volume, so the order-flow checks are skipped and the gold 5m strategy (which requires them) stays idle on that feed. |
 | Bitcoin prices | BTC/USDT on Binance. |
 | Order flow, whales, order book | Binance trade stream and order book. For gold this is the PAXG market, shifted to line up with the price feed. |
 | Big players (gold) | CFTC Commitments of Traders, used as one confluence check. |
