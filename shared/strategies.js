@@ -127,7 +127,121 @@ export function cvdSign(w, L) {
   return Math.sign(cvd);
 }
 
+const ema = (w, n, L = w.length - 1) => {
+  const k = 2 / (n + 1);
+  let e = w[Math.max(0, L - n * 4)].close;
+  for (let i = Math.max(0, L - n * 4) + 1; i <= L; i++) e += (w[i].close - e) * k;
+  return e;
+};
+
+// VWAP standard deviation since the daily anchor, at the last bar.
+function vwapBand(w, L) {
+  const day = Math.floor(w[L].time / DAY);
+  let pv = 0;
+  let v = 0;
+  let pv2 = 0;
+  for (let i = L; i >= 0 && Math.floor(w[i].time / DAY) === day; i--) {
+    const tp = (w[i].high + w[i].low + w[i].close) / 3;
+    const vol = w[i].volume || 1;
+    pv += tp * vol;
+    pv2 += tp * tp * vol;
+    v += vol;
+  }
+  if (!v) return null;
+  const mean = pv / v;
+  return { mean, sd: Math.sqrt(Math.max(0, pv2 / v - mean * mean)) };
+}
+
+// Session opens (UTC minutes): London 07:00, New York 13:30.
+const OPENS = [420, 810];
+
 export const CHECKS = {
+  // Trend pullback: EMA 20 above EMA 50 (below for shorts), price dips to the
+  // EMA 20 and closes back on the trend side with buyers (sellers) in control.
+  ema_pullback(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 220) return null;
+    const bar = w[L];
+    const e20 = ema(w, 20);
+    const e50 = ema(w, 50);
+    const e20p = ema(w, 20, L - 5);
+    for (const dir of ['bull', 'bear']) {
+      const bull = dir === 'bull';
+      if (bull ? !(e20 > e50 && e20 > e20p) : !(e20 < e50 && e20 < e20p)) continue;
+      if (bull ? !(bar.low <= e20 && bar.close > e20) : !(bar.high >= e20 && bar.close < e20)) continue;
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.05)) continue;
+      const stop = bull ? Math.min(bar.low, e50) - 0.2 * a[L] : Math.max(bar.high, e50) + 0.2 * a[L];
+      return plan(dir, bar, stop, { why: `Pullback to EMA 20 (${e20.toFixed(2)}) in a ${bull ? 'rising' : 'falling'} trend` });
+    }
+    return null;
+  },
+
+  // Opening range breakout: the high/low of the first 15 minutes of London or
+  // New York, broken by a strong close on above-average volume.
+  orb(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const sec = L ? w[L].time - w[L - 1].time : 60;
+    const m = Math.floor((bar.time % 86400) / 60);
+    const open = OPENS.find((o) => m >= o + 15 && m < o + 120);
+    if (open == null) return null;
+    const day = Math.floor(bar.time / 86400) * 86400;
+    const from = day + open * 60;
+    const to = from + 900;
+    let hi = -Infinity;
+    let lo = Infinity;
+    let n = 0;
+    let broken = false;
+    for (let i = L - 1; i >= 0 && w[i].time >= from; i--) {
+      if (w[i].time < to) {
+        hi = Math.max(hi, w[i].high);
+        lo = Math.min(lo, w[i].low);
+        n++;
+      } else if (w[i].close > hi || w[i].close < lo) broken = true;
+    }
+    if (n < Math.max(1, Math.floor(900 / sec) - 1) || !Number.isFinite(hi)) return null;
+    // A break counts only the first time; re-check closes after the range against the final range.
+    for (let i = L - 1; i >= 0 && w[i].time >= to; i--) if (w[i].close > hi || w[i].close < lo) broken = true;
+    if (broken) return null;
+    const vAvg = avgVolume(w, L);
+    if (!(bar.volume >= 1.5 * vAvg)) return null;
+    const range = hi - lo;
+    if (!(range > 0.3 * a[L] && range < 4 * a[L])) return null;
+    for (const dir of ['bull', 'bear']) {
+      const bull = dir === 'bull';
+      if (bull ? !(bar.close > hi) : !(bar.close < lo)) continue;
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.1)) continue;
+      const stop = bull ? Math.max(lo, hi - range * 0.5) - 0.1 * a[L] : Math.min(hi, lo + range * 0.5) + 0.1 * a[L];
+      return plan(dir, bar, stop, { why: `${open === 420 ? 'London' : 'New York'} opening range ${lo.toFixed(2)}–${hi.toFixed(2)} broken on volume`, level: bull ? hi : lo });
+    }
+    return null;
+  },
+
+  // VWAP band reversion: price stretches beyond 2 standard deviations from the
+  // day's VWAP and the next close snaps back inside with order flow agreeing.
+  vwap_band(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 30) return null;
+    const bar = w[L];
+    const prev = w[L - 1];
+    const band = vwapBand(w, L - 1);
+    if (!band || !(band.sd > 0.3 * a[L])) return null;
+    const up = band.mean + 2 * band.sd;
+    const dn = band.mean - 2 * band.sd;
+    for (const dir of ['bull', 'bear']) {
+      const bull = dir === 'bull';
+      if (bull ? !(prev.low < dn && bar.close > dn) : !(prev.high > up && bar.close < up)) continue;
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.05)) continue;
+      const ext = bull ? Math.min(prev.low, bar.low) : Math.max(prev.high, bar.high);
+      const stop = bull ? ext - 0.2 * a[L] : ext + 0.2 * a[L];
+      return plan(dir, bar, stop, { why: `Snapped back inside the VWAP 2σ band (VWAP ${band.mean.toFixed(2)})` });
+    }
+    return null;
+  },
+
   // Trap confirmed by order flow: cumulative delta already points the trade's way.
   trap_flow(ctx) {
     const s = CHECKS.trap(ctx);

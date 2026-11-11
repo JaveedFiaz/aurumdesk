@@ -65,7 +65,7 @@ export class Overlay {
     const y0 = this.series.priceToCoordinate(1000);
     const y1 = this.series.priceToCoordinate(2000);
     const sig = [this.version, w, h, range && range.from.toFixed(2), range && range.to.toFixed(2), y0, y1].join('|');
-    if (sig === this.sig && performance.now() - (this.animStart || 0) > 1000) return;
+    if (sig === this.sig && !this.hasLive && performance.now() - (this.animStart || 0) > 1000) return;
     this.sig = sig;
 
     const dpr = window.devicePixelRatio || 1;
@@ -192,9 +192,9 @@ export class Overlay {
       const bull = a.dir === 'bull';
       const i = idx(a.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
-      this.box(x1, right, Y(a.top), Y(a.bottom), bull ? green(0.16) : red(0.16), bull ? green(0.85) : red(0.85));
-      this.hline(x1, right, Y(a.stop), bull ? red(0.7) : green(0.7), [4, 4], 1);
-      this.tag(`${bull ? 'BUY' : 'SELL'} AREA · ${a.kind} retest · SL ${a.stop.toFixed(2)} · TP ${a.target.toFixed(2)}`, right - 6, Y(bull ? a.top : a.bottom) + (bull ? -9 : 9), bull ? COLORS.bull : COLORS.bear, 'right', true);
+      this.box(x1, right, Y(a.top), Y(a.bottom), bull ? green(0.12) : red(0.12), bull ? green(0.8) : red(0.8), true);
+      this.hline(x1, right, Y(a.stop), bull ? red(0.6) : green(0.6), [4, 4], 1);
+      this.pill(`${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`, right - 6, Y(bull ? a.top : a.bottom) + (bull ? -11 : 11), bull ? '#34f5c5' : '#ff5fa2', '#140a2e', 'right');
     }
 
     for (const g of t.triggers || []) {
@@ -202,48 +202,81 @@ export class Overlay {
       const i = idx(g.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
       this.hline(x1, right, Y(g.price), bull ? green(0.9) : red(0.9), [8, 4], 1.5);
-      this.tag(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} · high-volume breakout`, right - 6, Y(g.price) + (bull ? -9 : 9), bull ? COLORS.bull : COLORS.bear, 'right', true);
+      this.pill(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} on a volume breakout`, right - 6, Y(g.price) + (bull ? -11 : 11), bull ? '#34f5c5' : '#ff5fa2', '#140a2e', 'right');
     }
 
-    // Live setups: a position box that grows out from the entry candle. For a
-    // sell the red (stop) half is above and the green (target) half below.
+    // Live setups, drawn like a long/short position tool anchored at the signal
+    // candle: target zone and stop zone, entry line, take-profit steps, the
+    // live result in R, and a badge naming the trade.
     const key = (t.live || []).map((s) => `${s.strategy}:${s.signalTime}`).join('|');
     if (key !== this.liveKey) {
       this.liveKey = key;
       if (key) this.animStart = performance.now();
     }
-    const k = Math.min(1, (performance.now() - (this.animStart || 0)) / 900);
+    this.hasLive = !!(t.live && t.live.length);
+    this.boxFrom = null;
+    const now = performance.now();
+    const k = Math.min(1, (now - (this.animStart || 0)) / 900);
     const ease = 1 - (1 - k) ** 3;
+    const pulse = 0.55 + 0.45 * Math.sin(now / 260);
+    const price = candles[candles.length - 1]?.close;
+    const barW = Math.max(2, (X(candles.length - 1) ?? 0) - (X(candles.length - 2) ?? 0));
     for (const s of t.live || []) {
       const bull = s.dir === 'bull';
-      const i = s.entryTime ? idx(s.entryTime) : candles.length - 1;
-      const x1 = (i == null ? null : X(i)) ?? lastX;
-      if (x1 == null) continue;
-      const x2 = x1 + (right - x1) * ease;
-      this.box(x1, x2, Y(s.entry), Y(s.target), green(0.22), green(0.95));
-      this.box(x1, x2, Y(s.entry), Y(s.stop), red(0.24), red(0.95));
-      this.hline(x1, x2, Y(s.entry), '#e9e3ff', [], 2);
-      // Take-profit steps at 1R, 2R (and 3R) inside the target zone.
+      const sign = bull ? 1 : -1;
+      const i = idx(s.signalTime);
+      const x0 = (i == null ? null : X(i)) ?? lastX;
+      if (x0 == null) continue;
+      const full = right - 4; // through the empty space to the right of the last candle
+      const x2 = x0 + (full - x0) * ease;
+      const yE = Y(s.entry);
+      const yS = Y(s.stop);
+      const yT = Y(s.target);
+      if (yE == null || yS == null || yT == null) continue;
+      this.box(x0, x2, yE, yT, green(0.18), green(0.9));
+      this.box(x0, x2, yE, yS, red(0.2), red(0.9));
+      // How far price has moved inside the box.
       const risk = Math.abs(s.entry - s.stop);
+      if (Number.isFinite(price) && ease === 1) {
+        const yP = Y(price);
+        const won = sign * (price - s.entry) >= 0;
+        if (yP != null) this.box(x0, x2, yE, yP, won ? green(0.28) : red(0.3), 'rgba(0,0,0,0)');
+      }
+      // Entry line with a pulsing glow.
+      const ctx = this.ctx;
+      ctx.save();
+      ctx.shadowColor = '#e9e3ff';
+      ctx.shadowBlur = 10 * pulse;
+      this.hline(x0, x2, yE, `rgba(233,227,255,${0.6 + 0.4 * pulse})`, [], 2);
+      ctx.restore();
       const steps = Math.max(1, Math.round(Math.abs(s.target - s.entry) / risk));
-      for (let k = 1; k < steps; k++) this.hline(x1, x2, Y(s.entry + (bull ? 1 : -1) * k * risk), green(0.7), [3, 3], 1);
+      for (let n = 1; n < steps; n++) this.hline(x0, x2, Y(s.entry + sign * n * risk), green(0.75), [4, 3], 1);
       if (ease < 1) continue;
-      for (let k = 1; k < steps; k++) this.tag(`TP${k} · ${k}R`, right - 6, Y(s.entry + (bull ? 1 : -1) * k * risk), COLORS.bull, 'right');
-      // The BUY/SELL marker on the candle and the setup card name the trade; no extra label here.
-      this.tag(`TP${steps} ${s.target.toFixed(2)} · ${steps}R`, right - 6, Y(s.target) + (bull ? 9 : -9), COLORS.bull, 'right', true);
-      this.tag(`SL ${s.stop.toFixed(2)}`, right - 6, Y(s.stop) + (bull ? -9 : 9), COLORS.bear, 'right', true);
+      const fx = (v) => v.toFixed(2);
+      const lx = x2 - 6;
+      this.tag(`TARGET ${fx(s.target)}  ${bull ? '+' : '−'}${fx(Math.abs(s.target - s.entry))} · ${steps}R`, lx, yT + (bull ? 10 : -10), COLORS.bull, 'right', true);
+      for (let n = 1; n < steps; n++) this.tag(`TP${n} ${fx(s.entry + sign * n * risk)} · ${n}R`, lx, Y(s.entry + sign * n * risk), COLORS.bull, 'right', true);
+      this.tag(`ENTRY ${fx(s.entry)}`, lx, yE + (bull ? 10 : -10), '#e9e3ff', 'right', true);
+      this.tag(`STOP ${fx(s.stop)}  −${fx(risk)}`, lx, yS + (bull ? -10 : 10), COLORS.bear, 'right', true);
+      // Badge at the start of the box.
+      // Badge just outside the stop side of the box, clear of the price labels.
+      this.pill(`${bull ? '▲ LONG' : '▼ SHORT'}  R:R 1:${(Math.abs(s.target - s.entry) / risk).toFixed(1)}`, x0, bull ? Math.max(yE, yS) + 13 : Math.min(yE, yS) - 13, bull ? '#34f5c5' : '#ff5fa2', '#140a2e');
+      this.boxFrom = Math.min(this.boxFrom ?? Infinity, x0);
+      if (Number.isFinite(price)) {
+        const r = (sign * (price - s.entry)) / risk;
+        const yP = Y(price);
+        if (yP != null) this.pill(`${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, x2 + 6, yP, r >= 0 ? '#34f5c5' : '#ff5fa2', '#140a2e');
+      }
       if (s.trap && s.level) {
-        const si = idx(s.signalTime);
-        const sx = si == null ? x1 : X(si);
-        this.hline(Math.max(0, (sx ?? x1) - 90), x1, Y(s.level), '#c4b5fd', [3, 3], 1);
-        this.tag(bull ? 'TRAP BREAKDOWN · failed' : 'TRAP BREAKOUT · failed', x1 - 8, Y(s.level) + (bull ? 12 : -12), '#c4b5fd', 'right', true);
+        this.hline(Math.max(0, x0 - barW * 16), x0, Y(s.level), '#c4b5fd', [3, 3], 1);
+        this.tag(bull ? 'TRAP BREAKDOWN · failed' : 'TRAP BREAKOUT · failed', x0 - barW * 2, Y(s.level) + (bull ? 13 : -13), '#c4b5fd', 'right', true);
       }
     }
 
     // Volume surges: candles with at least twice the average volume where one side dominated.
     for (const v of t.surges || []) {
       const x = X(v.index);
-      if (x == null || x < 0 || x > right) continue;
+      if (x == null || x < 0 || x > right || (this.boxFrom != null && x > this.boxFrom - 30)) continue; // not over a position box
       const buy = v.side === 'buy';
       const y = buy ? Y(candles[v.index].low) + 14 : Y(candles[v.index].high) - 14;
       this.tag(`${buy ? 'BUYERS' : 'SELLERS'} ${v.mult.toFixed(1)}×`, x, y, buy ? COLORS.bull : COLORS.bear, 'center', true);
@@ -307,6 +340,23 @@ export class Overlay {
     ctx.lineTo(x2, Math.round(y) + 0.5);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // Solid rounded label: text in `fg` on a `bg` fill.
+  pill(text, x, y, bg, fg, align = 'left') {
+    if (x == null || y == null || Number.isNaN(y)) return;
+    const ctx = this.ctx;
+    ctx.font = '700 11px Inter, system-ui, sans-serif';
+    const tw = ctx.measureText(text).width;
+    const w = tw + 14;
+    const left = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(left, y - 9, w, 18, 9);
+    else ctx.rect(left, y - 9, w, 18);
+    ctx.fill();
+    ctx.fillStyle = fg;
+    ctx.fillText(text, left + 7, y + 0.5);
   }
 
   tag(text, x, y, color, align, bold = false) {

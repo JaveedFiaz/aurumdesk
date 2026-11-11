@@ -18,7 +18,7 @@ const DN = '#ff5fa2';
 const store = {
   get(k, d) {
     try {
-      const v = localStorage.getItem(`scalper3:${k}`);
+      const v = localStorage.getItem(`scalper4:${k}`);
       return v == null ? d : JSON.parse(v);
     } catch {
       return d;
@@ -26,13 +26,14 @@ const store = {
   },
   set(k, v) {
     try {
-      localStorage.setItem(`scalper3:${k}`, JSON.stringify(v));
+      localStorage.setItem(`scalper4:${k}`, JSON.stringify(v));
     } catch { /* storage unavailable */ }
   },
 };
 
 const LAYERS = [
   { id: 'signals', label: 'Setups & areas' },
+  { id: 'levels', label: 'Key levels' },
   { id: 'surges', label: 'Volume surges' },
   { id: 'structure', label: 'Structure' },
   { id: 'zones', label: 'Zones' },
@@ -40,7 +41,7 @@ const LAYERS = [
   { id: 'walls', label: 'Book walls' },
   { id: 'vwap', label: 'VWAP' },
 ];
-const DEFAULT_LAYERS = { signals: true, surges: true, structure: false, zones: false, ob: false, liq: true, walls: true, vwap: true, htf: false, sr: false, profile: false };
+const DEFAULT_LAYERS = { signals: true, levels: true, surges: true, structure: false, zones: false, ob: false, liq: false, walls: true, vwap: true, htf: false, sr: false, profile: false };
 const TFS = ['M1', 'M5', 'M15'];
 
 const state = {
@@ -99,7 +100,7 @@ const chart = LC.createChart(chartEl, {
   layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#c3bde0', fontFamily: 'Inter, system-ui, sans-serif' },
   grid: { vertLines: { color: 'rgba(255,255,255,0.05)' }, horzLines: { color: 'rgba(255,255,255,0.05)' } },
   rightPriceScale: { borderColor: 'rgba(255,255,255,0.16)' },
-  timeScale: { borderColor: 'rgba(255,255,255,0.16)', timeVisible: true, secondsVisible: false, rightOffset: 14 },
+  timeScale: { borderColor: 'rgba(255,255,255,0.16)', timeVisible: true, secondsVisible: false, rightOffset: 22 },
   crosshair: { mode: LC.CrosshairMode.Normal, vertLine: { color: 'rgba(196,181,253,0.6)', labelBackgroundColor: '#2a1a5e' }, horzLine: { color: 'rgba(196,181,253,0.6)', labelBackgroundColor: '#2a1a5e' } },
   localization: { locale: safeLocale(), priceFormatter: (p) => p.toFixed(2) },
 });
@@ -180,7 +181,7 @@ async function load({ soft = false } = {}) {
     candleSeries.setData(candles.map(bar));
     volumeSeries.setData(volBars(candles, state.layers.surges ? state.surges : []));
     if (range) chart.timeScale().setVisibleLogicalRange(range);
-    else chart.timeScale().setVisibleLogicalRange({ from: candles.length - 110, to: candles.length + 12 });
+    else chart.timeScale().setVisibleLogicalRange({ from: candles.length - 90, to: candles.length + 22 });
     runAnalysis();
     drawMarkers();
     $('banner').hidden = true;
@@ -347,6 +348,7 @@ function runAnalysis() {
   pushOverlay();
   renderBias();
   renderLiq();
+  drawLevels();
 }
 
 const play = () => state.bots[state.market]?.tfs?.[state.tf];
@@ -391,6 +393,38 @@ function renderBias() {
     r ? `<span class="chip">ATR ${fmt(r.atr)}</span>` : '',
     b && !b.pending ? `<span class="chip">${b.stats.filter((s) => s.active).length ? 'Strategy proven · trading' : 'Strategy on watch · not traded'}</span>` : '<span class="chip">Backtesting…</span>',
   ].join('');
+}
+
+// Exact key levels on the price axis: previous day high/low, today's high/low,
+// and the nearest resting liquidity above and below.
+let levelLines = [];
+function drawLevels() {
+  levelLines.forEach((l) => candleSeries.removePriceLine(l));
+  levelLines = [];
+  const r = state.result;
+  const c = state.candles;
+  if (!state.layers.levels || !r || !c.length) return;
+  const price = c[c.length - 1].close;
+  const day = Math.floor(c[c.length - 1].time / 86400) * 86400;
+  let hi = -Infinity;
+  let lo = Infinity;
+  for (let i = c.length - 1; i >= 0 && c[i].time >= day; i--) {
+    hi = Math.max(hi, c[i].high);
+    lo = Math.min(lo, c[i].low);
+  }
+  const lines = [];
+  if (r.prevDay) lines.push([r.prevDay.high, 'PDH', '#ffd27a'], [r.prevDay.low, 'PDL', '#ffd27a']);
+  if (Number.isFinite(hi)) lines.push([hi, 'Day high', '#c4b5fd'], [lo, 'Day low', '#c4b5fd']);
+  const above = r.pools.filter((p) => p.kind === 'EQH' && p.price > price).sort((a, b) => a.price - b.price)[0];
+  const below = r.pools.filter((p) => p.kind === 'EQL' && p.price < price).sort((a, b) => b.price - a.price)[0];
+  if (above) lines.push([above.price, 'Buy stops', '#7af0c6']);
+  if (below) lines.push([below.price, 'Sell stops', '#ff9dc4']);
+  const used = [];
+  for (const [p, title, color] of lines) {
+    if (used.some((u) => Math.abs(u - p) < r.atr * 0.15)) continue; // no stacked labels
+    used.push(p);
+    levelLines.push(candleSeries.createPriceLine({ price: p, color, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title }));
+  }
 }
 
 let wallLines = [];
@@ -477,6 +511,7 @@ $('layers').addEventListener('click', (e) => {
   if (id === 'walls') drawWalls();
   if (id === 'surges') volumeSeries.setData(volBars(state.candles, state.layers.surges ? state.surges : []));
   if (id === 'signals') drawMarkers();
+  if (id === 'levels') drawLevels();
   pushOverlay();
 });
 
@@ -625,6 +660,65 @@ function renderHero() {
   $('goTf')?.addEventListener('click', () => switchTo(state.market, t.tf));
 }
 
+// The guide in the corner of the chart: what to do right now.
+function renderGuide() {
+  const el = $('guide');
+  const b = state.bots[state.market];
+  if (!b || state.view === 'tv') {
+    el.innerHTML = '';
+    return;
+  }
+  const k = basisOf();
+  const price = state.prices[state.market] ?? state.candles[state.candles.length - 1]?.close;
+  const plays = Object.entries(b.tfs).filter(([, t]) => !t.pending);
+  const active = plays.flatMap(([, t]) => t.signals).sort((x, y) => y.signalTime - x.signalTime)[0];
+  if (active && Number.isFinite(price)) {
+    const t = sh(active, k);
+    // Zoom the chart onto a new trade so its box is large and readable.
+    const fk = `${state.market}:${state.tf}:${sigId(active)}`;
+    if (fk !== state.focusKey && active.tf === state.tf && state.candles.length > 80) {
+      state.focusKey = fk;
+      const n = state.candles.length;
+      chart.timeScale().setVisibleLogicalRange({ from: n - 70, to: n + 22 });
+    }
+    const bull = t.dir === 'bull';
+    const sign = bull ? 1 : -1;
+    const risk = Math.abs(t.entry - t.stop);
+    const r = (sign * (price - t.entry)) / risk;
+    const steps = Math.max(1, Math.round(Math.abs(t.target - t.entry) / risk));
+    const span = Math.abs(t.target - t.stop);
+    const pos = Math.max(0, Math.min(1, (sign * (price - t.stop)) / span));
+    const away = (p) => `${signed(p - price)}`;
+    el.className = `guide active ${t.dir}`;
+    el.innerHTML = `<div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${esc(mk().label)}</span><span class="gs">${TF[t.tf].label} · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
+      <div class="muted">${esc(stratName(t.strategy))}</div>
+      <div class="gr"><span>TARGET</span><b class="bull">${fmt(t.target)}</b><i>${away(t.target)}</i></div>
+      ${Array.from({ length: steps - 1 }, (_, n) => `<div class="gr"><span>TP${n + 1}</span><b class="bull">${fmt(t.entry + sign * (n + 1) * risk)}</b><i>${away(t.entry + sign * (n + 1) * risk)}</i></div>`).join('')}
+      <div class="gr"><span>ENTRY</span><b>${fmt(t.entry)}</b><i>${away(t.entry)}</i></div>
+      <div class="gr"><span>STOP</span><b class="bear">${fmt(t.stop)}</b><i>${away(t.stop)}</i></div>
+      <div class="prog" style="--e:${((1 / (steps + 1)) * 100).toFixed(1)}%"><b style="left:${(pos * 100).toFixed(1)}%"></b></div>
+      <div class="gr"><span>NOW</span><b>${fmt(price)}</b><i class="${r >= 0 ? 'bull' : 'bear'}" style="font-weight:800">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</i></div>`;
+    return;
+  }
+  const waits = plays.flatMap(([tf, t]) => [
+    ...t.areas.map((a) => sh(a, k)).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })),
+    ...t.triggers.map((g) => sh(g, k)).map((g) => ({ tf, dir: g.dir, text: `${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}`, at: g.price })),
+  ]).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
+  el.className = 'guide';
+  el.innerHTML = `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
+    ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`;
+}
+
+function flashSignal(s) {
+  const el = $('flashSig');
+  const bull = s.dir === 'bull';
+  el.className = `flash-sig ${s.dir}`;
+  el.innerHTML = `${bull ? '▲ LONG' : '▼ SHORT'}<small>${esc(mkOf(s.market).label || '')} ${TF[s.tf].label} · entry ${fmt(s.entry)} · stop ${fmt(s.stop)} · target ${fmt(s.target)}</small>`;
+  el.hidden = false;
+  clearTimeout(flashSignal.t);
+  flashSignal.t = setTimeout(() => { el.hidden = true; }, 3300);
+}
+
 function checkNewSignals() {
   const all = Object.entries(state.bots).flatMap(([m, b]) => Object.values(b.tfs).flatMap((t) => (t.signals || []).map((s) => ({ ...s, market: m }))));
   const ids = new Set(all.map((s) => `${s.market}:${sigId(s)}`));
@@ -637,6 +731,7 @@ function checkNewSignals() {
     Object.assign(s, sh(s, basisOf(s.market)));
     toast(`<b>New ${esc(m?.label || s.market)} ${TF[s.tf].label} setup:</b> ${s.dir === 'bull' ? 'BUY' : 'SELL'} · ${esc(stratName(s.strategy))} · entry ≈ ${fmt(s.entry)}`);
     beep();
+    if (s.market === state.market) flashSignal(s);
     if ('Notification' in window && Notification.permission === 'granted') {
       try {
         new Notification(`${m?.label} ${s.dir === 'bull' ? 'BUY' : 'SELL'} · ${TF[s.tf].label}`, { body: `${stratName(s.strategy)} · entry ≈ ${fmt(s.entry)} · SL ${fmt(s.stop)} · TP ${fmt(s.target)}` });
@@ -671,6 +766,7 @@ async function loadBots() {
   checkNewSignals();
   pushOverlay();
   drawMarkers();
+  renderGuide();
 }
 
 // ---- Order flow, whales, liquidity ------------------------------------------------
@@ -1013,6 +1109,7 @@ async function boot() {
     if (tapeDirty || !state.streamOn) renderTapeSplit();
     tapeDirty = false;
     renderPositions();
+    renderGuide();
   }, 500);
   setInterval(() => refreshFlow(), 400); // live book, delta and whales
   setInterval(loadDeepBook, 4000);
