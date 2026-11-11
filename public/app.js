@@ -12,8 +12,8 @@ const LC = window.LightweightCharts;
 const nowSec = () => Math.floor(Date.now() / 1000);
 const stratName = (id) => STRATEGY_BY_ID[id]?.name || id;
 const sigId = (t) => `${t.tf}:${t.strategy}:${t.signalTime}`;
-const UP = '#34f5c5';
-const DN = '#ff5fa2';
+const UP = '#16c784';
+const DN = '#ea3943';
 
 const store = {
   get(k, d) {
@@ -134,7 +134,7 @@ function volBars(c, surges) {
   return c.map((x, i) => {
     const side = hot.get(i);
     const up = x.buyVolume != null ? x.buyVolume * 2 >= x.volume : x.close >= x.open;
-    return { time: x.time, value: x.volume || 0, color: side ? (side === 'buy' ? UP : DN) : up ? 'rgba(52,245,197,0.28)' : 'rgba(255,95,162,0.28)' };
+    return { time: x.time, value: x.volume || 0, color: side ? (side === 'buy' ? UP : DN) : up ? 'rgba(22,199,132,0.28)' : 'rgba(234,57,67,0.28)' };
   });
 }
 
@@ -294,7 +294,7 @@ function mergedBook() {
 
 function volBar(c) {
   const up = c.buyVolume != null ? c.buyVolume * 2 >= c.volume : c.close >= c.open;
-  return { time: c.time, value: c.volume || 0, color: up ? 'rgba(52,245,197,0.28)' : 'rgba(255,95,162,0.28)' };
+  return { time: c.time, value: c.volume || 0, color: up ? 'rgba(22,199,132,0.28)' : 'rgba(234,57,67,0.28)' };
 }
 
 // The open candle from the exchange: volume and buyer volume always; prices
@@ -341,6 +341,29 @@ async function refreshPerpVolume() {
       volumeSeries.update(volBar(c));
     }
   } catch { /* next pass */ }
+}
+
+// Countdown to the candle close, under the live price on the price axis (like TradingView).
+function renderCountdown() {
+  const el = $('barCd');
+  const c = state.candles[state.candles.length - 1];
+  if (!c || state.view === 'tv') {
+    el.hidden = true;
+    return;
+  }
+  const left = Math.max(0, c.time + TF[state.tf].sec - Date.now() / 1000);
+  const y = candleSeries.priceToCoordinate(c.close);
+  const paneH = chart.timeScale().height ? $('chart').clientHeight - chart.timeScale().height() : $('chart').clientHeight;
+  if (y == null || y < 0 || y > paneH - 16) {
+    el.hidden = true;
+    return;
+  }
+  const m = Math.floor(left / 60);
+  const sec = Math.floor(left % 60);
+  el.textContent = `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  el.style.top = `${Math.round(y + 11)}px`;
+  el.style.width = `${chart.priceScale('right').width()}px`;
+  el.hidden = false;
 }
 
 let refreshTimer = null;
@@ -430,7 +453,7 @@ function withZones(areas) {
     if (out.some((a) => a.dir === dir)) continue;
     const bull = dir === 'bull';
     const z = [...r.zones, ...r.orderBlocks]
-      .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price))
+      .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price) && !(r.atr > 0 && x.top - x.bottom > 2.5 * r.atr))
       .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))[0];
     if (z) out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply' });
   }
@@ -444,7 +467,7 @@ function pushOverlay() {
   const trade = b && !b.pending ? {
     areas: withZones(b.areas.map((a) => sh(a, k))),
     triggers: b.triggers.map((g) => sh(g, k)),
-    live: [...b.signals, ...b.watch].map((t) => sh(t, k)),
+    live: [...b.signals.map((t) => ({ ...t, q: true })), ...b.watch.map((t) => ({ ...t, q: false }))].map((t) => sh(t, k)),
     history: b.recent.filter((t) => t.entryTime >= first).slice(-25).map((t) => sh(t, k)),
     surges: state.layers.surges ? (state.surges || []).slice(-3) : [],
   } : { areas: withZones([]), surges: state.layers.surges ? (state.surges || []).slice(-3) : [] };
@@ -501,8 +524,8 @@ function drawWalls() {
   const book = state.flow?.book;
   if (!book || !state.layers.walls) return;
   const top = (w) => w.slice().sort((a, b) => b.size - a.size).slice(0, 2);
-  for (const w of top(book.bidWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(52,245,197,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `bid wall ${compact(w.size)}` }));
-  for (const w of top(book.askWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(255,95,162,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `ask wall ${compact(w.size)}` }));
+  for (const w of top(book.bidWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(22,199,132,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `bid wall ${compact(w.size)}` }));
+  for (const w of top(book.askWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(234,57,67,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `ask wall ${compact(w.size)}` }));
 }
 
 // ---- Header ---------------------------------------------------------------------
@@ -730,7 +753,9 @@ function renderHero() {
 // The guide in the corner of the chart: what to do right now.
 // The guide card can be dragged anywhere on the chart; the spot is remembered.
 function setGuide(el, html, cls) {
-  const full = html ? `<div class="grip" title="Drag to move">⠿ drag</div>${html}` : '';
+  const min = store.get('guideMin', false);
+  const full = html ? `<div class="grip"><span title="Drag to move">⠿ drag</span><button type="button" class="gmin" aria-label="${min ? 'Expand' : 'Minimize'}" title="${min ? 'Expand' : 'Minimize'}">${min ? '▢' : '–'}</button></div>${html}` : '';
+  cls += min ? ' min' : '';
   if (el.className.replace(' dragging', '') !== cls) el.className = cls;
   if (full !== el._html) {
     el._html = full;
@@ -750,7 +775,14 @@ function initGuideDrag() {
   };
   place(store.get('guidePos', null));
   let start = null;
+  el.addEventListener('click', (e) => {
+    if (!e.target.closest('.gmin')) return;
+    store.set('guideMin', !store.get('guideMin', false));
+    el._html = null;
+    renderGuide();
+  });
   el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.gmin')) return;
     start = { x: e.clientX, y: e.clientY, l: el.offsetLeft, t: el.offsetTop };
     el.setPointerCapture(e.pointerId);
     el.classList.add('dragging');
@@ -798,7 +830,8 @@ function renderGuide() {
     const pos = Math.max(0, Math.min(1, (sign * (price - t.stop)) / span));
     const away = (p) => `${signed(p - price)}`;
     setGuide(el, `<div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${esc(mk().label)}</span><span class="gs">${TF[t.tf].label} · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
-      <div class="muted">${esc(stratName(t.strategy))}</div>
+      <div class="muted">${esc(stratName(t.strategy))}${t.why ? ` · ${esc(t.why)}` : ''}</div>
+      ${t.factors?.length ? `<div class="gconf"><b>Confluence ${t.factors.filter((f) => f.ok).length}/${t.factors.length} ✓</b><ul>${t.factors.map((f) => `<li class="${f.ok ? 'ok' : 'no'}">${f.ok ? '✓' : '✗'} ${esc(f.label)}</li>`).join('')}</ul></div>` : ''}
       <div class="gr"><span>TARGET</span><b class="bull">${fmt(t.target)}</b><i>${away(t.target)}</i></div>
       ${Array.from({ length: steps - 1 }, (_, n) => `<div class="gr"><span>TP${n + 1}</span><b class="bull">${fmt(t.entry + sign * (n + 1) * risk)}</b><i>${away(t.entry + sign * (n + 1) * risk)}</i></div>`).join('')}
       <div class="gr"><span>ENTRY</span><b>${fmt(t.entry)}</b><i>${away(t.entry)}</i></div>
@@ -854,6 +887,7 @@ function renderScore() {
   $('score').innerHTML = Object.entries(b.tfs).map(([tf, t]) => {
     if (t.pending) return `<div class="sc"><div class="t">${TF[tf].label} · ${t.strategies.map(stratName).join(', ')}<span class="st off">${t.error ? 'ERROR' : 'TESTING'}</span></div><div class="n">${t.error ? esc(t.error) : 'Backtesting on real history…'}</div></div>`;
     return t.stats.map((s) => `<div class="sc" title="${esc(s.desc)}"><div class="t">${TF[tf].label} · ${esc(s.name)}<span class="st ${s.active ? 'on' : 'off'}">${s.active ? 'TRADING' : 'WATCH ONLY'}</span></div>
+      ${s.gate ? `<div class="n">Quality filter: only setups with ${Math.round(s.gate * 8)}/8+ confluence${s.all ? ` · without it: ${s.all.trades} trades, PF ${Number.isFinite(s.all.pf) ? s.all.pf.toFixed(2) : '∞'}` : ''}</div>` : ''}
       <div class="n">${s.trades} trades in ${t.days} days · ${pct(s.winRate)} won · PF ${Number.isFinite(s.pf) ? s.pf.toFixed(2) : '∞'} · target ${s.rr}R</div>
       <div class="n">Average <span class="${s.expR >= 0 ? 'bull' : 'bear'}">${signed(s.expR)}R</span> · total <span class="${s.totalR >= 0 ? 'bull' : 'bear'}">${signed(s.totalR, 1)}R</span> · worst drop ${fmt(s.maxDD, 1)}R · recent 40% <span class="${s.outSample.expR >= 0 ? 'bull' : 'bear'}">${signed(s.outSample.expR)}R</span></div></div>`).join('');
   }).join('');
@@ -1265,6 +1299,7 @@ async function boot() {
   setInterval(() => refreshFlow(), 400); // live book, delta and whales
   setInterval(loadDeepBook, 4000);
   setInterval(refreshPerpVolume, 3000);
+  setInterval(renderCountdown, 250);
   setInterval(loadBots, 5000);
   setInterval(loadFlow, 4000); // only used when a market has no direct exchange feed
   setInterval(loadNews, 2000);

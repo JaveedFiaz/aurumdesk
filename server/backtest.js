@@ -27,7 +27,7 @@ const num = (v, dp = 2) => (Number.isFinite(v) ? v.toFixed(dp) : '∞');
 const now = Date.now() / 1000;
 
 console.log(`\nPulse Scalper backtest${providers.gold.demo ? ' (SYNTHETIC DEMO DATA)' : ''} · London/NY sessions · entry at next open · stop first on ties · cost ×${costx}\n`);
-console.log(`${pad('Market', 9)}${pad('TF', 5)}${pad('Strategy', 20)}${pad('Days', 6)}${pad('Trades', 8)}${pad('Win %', 7)}${pad('PF', 7)}${pad('Avg R', 8)}${pad('Total R', 9)}${pad('Max DD', 8)}${pad('First 60%', 11)}${pad('Last 40%', 10)}Status`);
+console.log(`${pad('Market', 9)}${pad('TF', 5)}${pad('Strategy (min conf.)', 24)}${pad('Days', 6)}${pad('Trades', 8)}${pad('Win %', 7)}${pad('PF', 7)}${pad('Avg R', 8)}${pad('Total R', 9)}${pad('Max DD', 8)}${pad('First 60%', 11)}${pad('Last 40%', 10)}Status`);
 for (const m of MARKETS) {
   if (arg('market') && arg('market') !== m.id) continue;
   for (const [tf, play] of Object.entries(m.plays)) {
@@ -39,7 +39,7 @@ for (const m of MARKETS) {
     const cost = ((c.at(-1).close * m.costBps) / 10000) * costx;
     const r = analyze(c, h, { tf: { id: tf, sec: TF[tf].sec }, htf: { id: play.htf, sec: TF[play.htf].sec }, include: play.strategies, rules: { ...DEFAULT_RULES, cost, maxPerDay: tf === 'M15' ? 3 : 6 }, cot: m.id === 'gold' ? cot : null, now });
     for (const s of r.stats) {
-      console.log(`${pad(m.label, 9)}${pad(TF[tf].label, 5)}${pad(`${s.name} ${s.rr}R`, 20)}${pad(r.days, 6)}${pad(s.trades, 8)}${pad((s.winRate * 100).toFixed(0), 7)}${pad(num(s.pf), 7)}${pad(num(s.expR), 8)}${pad(num(s.totalR, 1), 9)}${pad(num(s.maxDD, 1), 8)}${pad(`${num(s.inSample.expR)}R`, 11)}${pad(`${num(s.outSample.expR)}R`, 10)}${s.active ? 'TRADING' : 'watch only'}`);
+      console.log(`${pad(m.label, 9)}${pad(TF[tf].label, 5)}${pad(`${s.name} ${s.rr}R ${Math.round(s.gate * 8)}/8`, 24)}${pad(r.days, 6)}${pad(s.trades, 8)}${pad((s.winRate * 100).toFixed(0), 7)}${pad(num(s.pf), 7)}${pad(num(s.expR), 8)}${pad(num(s.totalR, 1), 9)}${pad(num(s.maxDD, 1), 8)}${pad(`${num(s.inSample.expR)}R`, 11)}${pad(`${num(s.outSample.expR)}R`, 10)}${s.active ? 'TRADING' : 'watch only'}`);
     }
   }
 }
