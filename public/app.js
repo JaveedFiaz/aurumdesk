@@ -800,10 +800,10 @@ async function boot() {
     renderPositions();
   }, 500);
   setInterval(loadBots, 5000);
-  setInterval(loadFlow, 3000);
+  setInterval(loadFlow, 4000);
   setInterval(loadNews, 2000);
   setInterval(loadPaper, 3000);
-  setInterval(() => load({ soft: true }), 30000);
+  setInterval(() => load({ soft: true }), 60000);
   setInterval(loadDayOpen, 5 * 60000);
   setInterval(renderPills, 30000);
   setInterval(() => { if (state.news) $('events').querySelectorAll('.event b.mono').forEach((el, i) => { el.textContent = countdown(state.news.events[i].time); }); }, 1000);

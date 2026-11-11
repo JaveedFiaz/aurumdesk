@@ -18,9 +18,37 @@ const NATIVES = [
   { id: '1M', months: 1 },
 ];
 
-export function createBinance({ base = 'https://data-api.binance.vision', symbol = 'PAXGUSDT' } = {}) {
-  async function get(path) {
-    const res = await fetch(`${base}${path}`);
+// Binance limits request "weight" per IP and bans IPs that keep going after a
+// 429. Every provider in this process shares one budget: bulk history pages
+// are paced, and after a 429/418 nothing is sent until the ban has passed.
+const limiter = { nextFree: 0, blockedUntil: 0 };
+const PACE_MS = 150; // one history page (weight 2) every 150 ms, about 800 weight a minute
+
+export function binanceBlockedUntil() {
+  return limiter.blockedUntil;
+}
+
+async function pace() {
+  const now = Date.now();
+  const at = Math.max(now, limiter.nextFree);
+  limiter.nextFree = at + PACE_MS;
+  if (at > now) await new Promise((r) => { setTimeout(r, at - now); });
+}
+
+export function createBinance({ base = 'https://data-api.binance.vision', symbol = 'PAXGUSDT', fetchImpl = (...a) => fetch(...a) } = {}) {
+  async function get(path, { bulk = false } = {}) {
+    if (bulk) await pace();
+    if (Date.now() < limiter.blockedUntil) {
+      throw new Error(`Binance rate limit: paused for ${Math.ceil((limiter.blockedUntil - Date.now()) / 1000)} s`);
+    }
+    const res = await fetchImpl(`${base}${path}`);
+    if (res.status === 429 || res.status === 418) {
+      const text = await res.text().catch(() => '');
+      const until = +(text.match(/banned until (\d+)/)?.[1] || 0);
+      const retry = +(res.headers?.get?.('retry-after') || 0) * 1000;
+      limiter.blockedUntil = Math.max(until, Date.now() + Math.max(retry, 60000)) + 5000;
+      throw new Error(`Binance rate limit: paused for ${Math.ceil((limiter.blockedUntil - Date.now()) / 1000)} s`);
+    }
     if (!res.ok) throw new Error(`Binance ${res.status}: ${(await res.text()).slice(0, 200)}`);
     return res.json();
   }
@@ -32,7 +60,7 @@ export function createBinance({ base = 'https://data-api.binance.vision', symbol
     note: 'PAXG (gold-backed token) as a free proxy for XAU/USD. Trades 24/7 and can differ slightly from broker spot.',
     natives: NATIVES,
     maxCandles: 5000,
-    pollMs: 1000,
+    pollMs: 3000,
 
     async fetchCandles(interval, limit) {
       const out = [];
@@ -40,7 +68,7 @@ export function createBinance({ base = 'https://data-api.binance.vision', symbol
       while (out.length < limit) {
         const n = Math.min(1000, limit - out.length);
         const q = `/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${n}${endTime ? `&endTime=${endTime}` : ''}`;
-        const rows = await get(q);
+        const rows = await get(q, { bulk: limit > 1000 });
         if (!rows.length) break;
         out.unshift(...rows.map((k) => ({
           time: Math.floor(k[0] / 1000),
@@ -67,6 +95,41 @@ export function createBinance({ base = 'https://data-api.binance.vision', symbol
       const j = await get(`/api/v3/depth?symbol=${symbol}&limit=${limit}`);
       const side = (rows) => rows.map(([p, q]) => ({ price: +p, size: +q }));
       return { bids: side(j.bids), asks: side(j.asks) };
+    },
+
+    // Live trades over one WebSocket for several providers' symbols. onTrade(symbol, trade).
+    stream(symbols, onTrade, onState = () => {}) {
+      if (typeof WebSocket === 'undefined') return () => {};
+      const url = `wss://data-stream.binance.vision/stream?streams=${symbols.map((x) => `${x.toLowerCase()}@aggTrade`).join('/')}`;
+      let ws;
+      let stopped = false;
+      let delay = 2000;
+      let timer;
+      const open = () => {
+        if (stopped) return;
+        try {
+          ws = new WebSocket(url);
+        } catch {
+          return;
+        }
+        ws.onopen = () => { delay = 2000; onState(true); };
+        ws.onmessage = (e) => {
+          try {
+            const d = JSON.parse(e.data).data;
+            if (d && d.e === 'aggTrade') onTrade(d.s, { time: d.T / 1000, price: +d.p, size: +d.q, side: d.m ? 'sell' : 'buy' });
+          } catch { /* ignore a malformed frame */ }
+        };
+        ws.onclose = () => {
+          onState(false);
+          if (stopped) return;
+          timer = setTimeout(open, delay);
+          timer.unref?.();
+          delay = Math.min(delay * 2, 60000);
+        };
+        ws.onerror = () => { try { ws.close(); } catch { /* already closed */ } };
+      };
+      open();
+      return () => { stopped = true; clearTimeout(timer); try { ws?.close(); } catch { /* already closed */ } };
     },
 
     async fetchPrice() {
