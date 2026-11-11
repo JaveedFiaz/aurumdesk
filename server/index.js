@@ -15,6 +15,7 @@ import { MARKETS, PLAY_TFS } from '../shared/markets.js';
 import { DEFAULT_RULES } from '../shared/strategies.js';
 import { createNews } from './news.js';
 import { loadAndAnalyze, TAIL, HTF_TAIL } from './play.js';
+import { createSpotGold } from './spot.js';
 import { setBinanceBlocked } from './providers/binance.js';
 
 import { deltaSeries, tradeFlow, whales, bookStats } from '../shared/flow.js';
@@ -98,6 +99,7 @@ export function createApp({
   adminToken = '',
   autoStart = true,
   log = () => {},
+  spot = null, // live spot price feed for gold (shown instead of PAXG)
 }) {
   const clients = new Set();
   const candleCache = new Map();
@@ -262,10 +264,25 @@ export function createApp({
     }
   }
 
+  // Gap between the spot quote and the market the strategies trade (PAXG for
+  // gold), smoothed so the chart does not jump. 0 for markets without spot.
+  const basis = {};
+  const spotPrice = {};
+  const tickMsg = (id) => ({ m: id, t: Math.floor(Date.now() / 1000), p: prices[id], ...(spotPrice[id] != null ? { spot: spotPrice[id], basis: basis[id] ?? 0 } : {}) });
+  function onSpot(id, s) {
+    spotPrice[id] = s;
+    const p = prices[id];
+    if (Number.isFinite(p)) {
+      const gap = s - p;
+      basis[id] = basis[id] == null ? gap : basis[id] + (gap - basis[id]) * 0.1;
+    }
+    broadcast(tickMsg(id));
+  }
+
   function setPrice(x, p) {
     if (!Number.isFinite(p)) return;
     prices[x.m.id] = p;
-    broadcast({ m: x.m.id, t: Math.floor(Date.now() / 1000), p });
+    broadcast(tickMsg(x.m.id));
     paper.onPrice(p, x.m.id, prices);
   }
 
@@ -320,6 +337,7 @@ export function createApp({
   async function boot() {
     cot = await cotSource.get().catch(() => null);
     news.start();
+    spot?.start((s) => onSpot('gold', s));
     startStream();
     for (const x of markets) loop(x);
     // Shortest histories first, so the 15m results appear quickly.
@@ -333,7 +351,7 @@ export function createApp({
       const r = st.live || st.full;
       tfs[tf] = r ? { ...r, recent: r.recent.slice(-40).map(({ factors, expected, ...t }) => t), testing: st.testing } : { pending: true, error: st.error, strategies: x.m.plays[tf].strategies.map((s) => s.id) };
     }
-    return { market: x.m.id, price: prices[x.m.id] ?? null, tfs };
+    return { market: x.m.id, price: prices[x.m.id] ?? null, spot: spotPrice[x.m.id] ?? null, basis: basis[x.m.id] ?? 0, tfs };
   }
 
   async function candles(x, tfId, limit) {
@@ -441,6 +459,10 @@ export function createApp({
             source: x.provider.label, flow: x.flow ? x.flow.label : null,
             // Binance symbol for the browser's live trade stream, when the flow feed is Binance.
             stream: x.flow && x.flow.name === 'binance' ? x.flow.symbol : null,
+            // Candles and live data come straight from Binance in the browser when this is set.
+            binance: x.provider.name === 'binance' ? x.provider.symbol : null,
+            spot: !!spot && x.m.id === 'gold',
+            spotSource: spot && x.m.id === 'gold' ? 'Swissquote spot XAU/USD' : null,
           })),
         });
       }
@@ -468,7 +490,7 @@ export function createApp({
       if (url.pathname === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write('retry: 3000\n\n');
-        for (const [m, p] of Object.entries(prices)) res.write(`data: ${JSON.stringify({ m, t: Math.floor(Date.now() / 1000), p })}\n\n`);
+        for (const m of Object.keys(prices)) res.write(`data: ${JSON.stringify(tickMsg(m))}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 15000);
         req.on('close', () => {
@@ -487,6 +509,7 @@ export function createApp({
 
   server.on('close', () => {
     closed = true;
+    spot?.stop();
     stopStream();
     news.stop();
   });
@@ -525,6 +548,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     paper,
     adminToken,
     workerEnv: { ...process.env },
+    spot: providers.gold.demo || process.env.SPOT_GOLD === '0' ? null : createSpotGold(),
     log: (msg) => console.log(`${new Date().toISOString().slice(11, 19)} ${msg}`),
   }).listen(port, () => {
     console.log(`Pulse Scalper running at http://localhost:${port}  (gold: ${providers.gold.label}, btc: ${providers.btc.label})`);
