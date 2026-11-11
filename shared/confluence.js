@@ -4,7 +4,7 @@
 
 import { deltaRatio } from './flow.js';
 import { cotBias } from './cot.js';
-import { inKillzone } from './strategies.js';
+import { inKillzone, swept, cvdSign } from './strategies.js';
 
 export const FACTORS = [
   { id: 'htf', label: '1H trend agrees', weight: 20 },
@@ -25,20 +25,6 @@ export const GRADES = [
 
 export const gradeOf = (score) => GRADES.find((g) => score >= g.min).id;
 
-
-// Was liquidity on the opposite side taken in the last 20 bars and reclaimed?
-function swept(ctx, dir) {
-  const { w, swings } = ctx;
-  const L = w.length - 1;
-  const bull = dir === 'bull';
-  for (const s of swings) {
-    if (s.type !== (bull ? 'L' : 'H') || s.confirmedAt > L || s.i < L - 80) continue;
-    for (let k = Math.max(s.confirmedAt, L - 20); k <= L; k++) {
-      if (bull ? w[k].low < s.price && w[k].close > s.price : w[k].high > s.price && w[k].close < s.price) return true;
-    }
-  }
-  return false;
-}
 
 // Nearest swing on the target side that price has not yet traded through.
 function room(ctx, s) {
@@ -78,11 +64,8 @@ export function scoreSetup(s, ctx, cot = null) {
   add('sweep', swept(ctx, s.dir));
   const dr = deltaRatio(w[L]);
   add('delta', dr == null ? null : sign * dr > 0.05);
-  if (w[L].buyVolume != null && L >= 8) {
-    let cvd = 0;
-    for (let k = L - 7; k <= L; k++) cvd += 2 * (w[k].buyVolume ?? w[k].volume / 2) - (w[k].volume || 0);
-    add('cvd', sign * cvd > 0);
-  }
+  const cv = cvdSign(w, L);
+  if (cv != null) add('cvd', sign * cv > 0);
   const cb = cot ? cotBias(cot) : null;
   add('cot', cot ? cb === s.dir : null);
   add('killzone', inKillzone(w[L].time));

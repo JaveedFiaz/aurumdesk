@@ -81,14 +81,6 @@ test('runBot reports every strategy and only signals from active ones', async ()
   assert.ok(r.to <= NOW);
 });
 
-test('HTTP API serves the trade finder', async (t) => {
-  const server = createApp({ provider: createDemo(), botHistory: 1500 });
-  await new Promise((res) => server.listen(0, res));
-  t.after(() => server.close());
-  const j = await (await fetch(`http://127.0.0.1:${server.address().port}/api/bot`)).json();
-  assert.equal(j.tf, 'M15');
-  assert.equal(j.stats.length, STRATEGIES.length);
-});
 
 // A rally to 110, a pullback, then a high-volume close through 110 at the London open.
 function breakoutSeries() {

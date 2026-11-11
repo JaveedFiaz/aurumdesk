@@ -1,15 +1,14 @@
 {
   "name": "aurumdesk",
   "version": "1.0.0",
-  "description": "Aurum Pulse: self-hosted XAU/USD terminal with graded trade setups, order flow, COT positioning, liquidity and a paper auto-trader.",
+  "description": "Pulse Scalper: self-hosted Gold and Bitcoin scalping terminal with verified setups, order flow, news and a paper auto-trader.",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "demo": "node server/index.js --demo",
     "test": "node --test",
-    "backtest": "node server/backtest.js",
-    "build:hosted": "node hosted/build.mjs"
+    "backtest": "node server/backtest.js"
   },
   "license": "UNLICENSED",
   "dependencies": {

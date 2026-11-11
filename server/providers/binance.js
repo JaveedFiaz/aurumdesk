@@ -27,6 +27,7 @@ export function createBinance({ base = 'https://data-api.binance.vision', symbol
 
   return {
     name: 'binance',
+    symbol,
     label: `Binance ${symbol}`,
     note: 'PAXG (gold-backed token) as a free proxy for XAU/USD. Trades 24/7 and can differ slightly from broker spot.',
     natives: NATIVES,

@@ -1,22 +1,22 @@
-import { TIMEFRAMES, TF, bucketStart } from '/shared/timeframes.js';
+import { TF, bucketStart } from '/shared/timeframes.js';
 import { analyze, vwap, vwapAnchor } from '/shared/analysis.js';
 import { STRATEGY_BY_ID } from '/shared/strategies.js';
-import { Overlay, COLORS } from '/overlay.js';
-import { sessionsNow, goldOpen } from '/sessions.js';
+import { Overlay } from '/overlay.js';
+import { sessionsNow } from '/sessions.js';
 import { feed } from '/feed.js';
-import {
-  $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, gauge, spark, deltaChart,
-} from '/ui.js';
+import { $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, spark, deltaChart } from '/ui.js';
 
 const LC = window.LightweightCharts;
 const nowSec = () => Math.floor(Date.now() / 1000);
 const stratName = (id) => STRATEGY_BY_ID[id]?.name || id;
-const sigId = (t) => `${t.strategy}:${t.signalTime}`;
+const sigId = (t) => `${t.tf}:${t.strategy}:${t.signalTime}`;
+const UP = '#34f5c5';
+const DN = '#ff5fa2';
 
 const store = {
   get(k, d) {
     try {
-      const v = localStorage.getItem(`pulse:${k}`);
+      const v = localStorage.getItem(`scalper2:${k}`);
       return v == null ? d : JSON.parse(v);
     } catch {
       return d;
@@ -24,51 +24,51 @@ const store = {
   },
   set(k, v) {
     try {
-      localStorage.setItem(`pulse:${k}`, JSON.stringify(v));
+      localStorage.setItem(`scalper2:${k}`, JSON.stringify(v));
     } catch { /* storage unavailable */ }
   },
 };
 
 const LAYERS = [
-  { id: 'signals', label: 'Signals & buy/sell areas', color: '#f5c451' },
-  { id: 'structure', label: 'Structure', color: COLORS.bull },
-  { id: 'ob', label: 'Order blocks', color: COLORS.bear },
-  { id: 'zones', label: 'Supply/Demand', color: 'rgb(34,211,238)' },
-  { id: 'htf', label: 'HTF zones', color: 'rgb(167,139,250)' },
-  { id: 'liq', label: 'Liquidity', color: COLORS.liq },
-  { id: 'walls', label: 'Book walls', color: '#ffe08a' },
-  { id: 'vwap', label: 'VWAP', color: '#f5c451' },
-  { id: 'sr', label: 'S/R', color: COLORS.sr },
-  { id: 'profile', label: 'Profile', color: COLORS.poc },
+  { id: 'signals', label: 'Setups & areas' },
+  { id: 'surges', label: 'Volume surges' },
+  { id: 'structure', label: 'Structure' },
+  { id: 'zones', label: 'Zones' },
+  { id: 'liq', label: 'Liquidity' },
+  { id: 'walls', label: 'Book walls' },
+  { id: 'vwap', label: 'VWAP' },
 ];
-const DEFAULT_LAYERS = { signals: true, structure: true, ob: true, zones: true, htf: true, liq: true, walls: true, vwap: true, sr: false, profile: false, volume: true };
-const HTF_OF = { M1: 'H1', M3: 'H1', M5: 'H1', M10: 'H4', M15: 'H1', M30: 'H4', M45: 'D1', H1: 'H4', H4: 'D1', D1: 'W1' };
-const CHART_TFS = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
+const DEFAULT_LAYERS = { signals: true, surges: true, structure: true, zones: false, ob: false, liq: true, walls: true, vwap: true, htf: false, sr: false, profile: false };
+const TFS = ['M1', 'M5', 'M15'];
 
 const state = {
-  tf: CHART_TFS.includes(store.get('tf', 'M15')) ? store.get('tf', 'M15') : 'M15',
+  market: store.get('market', 'gold'),
+  tf: TFS.includes(store.get('tf')) ? store.get('tf') : 'M5',
+  view: store.get('view', 'pulse') === 'tv' ? 'tv' : 'pulse',
   layers: { ...DEFAULT_LAYERS, ...store.get('layers', {}) },
   token: store.get('token', ''),
+  cfg: { markets: [] },
+  prices: {},
+  dayOpen: {},
   candles: [],
   result: null,
-  htf: null,
-  price: null,
-  dayOpen: null,
-  seq: 0,
-  cfg: {},
-  bot: null,
+  bots: {}, // market -> /api/bot result
   flow: null,
-  cot: null,
   paper: null,
-  heroKey: null,
+  seq: 0,
+  heroKey: '',
   seenSignals: null,
-  seenWhales: new Set(),
+  seenNews: null,
   seenLog: null,
+  whaleList: [],
+  whaleMin: {},
+  tape: [], // rolling live trades of the current market
+  streamOn: false,
   formDirty: false,
-  view: store.get('view', 'pulse') === 'tv' ? 'tv' : 'pulse',
 };
+const mk = () => state.cfg.markets.find((m) => m.id === state.market) || { id: state.market, label: state.market, unit: '' };
 
-// ---- Chart ------------------------------------------------------------------
+// ---- Chart ---------------------------------------------------------------------
 
 function safeLocale() {
   try {
@@ -81,135 +81,112 @@ function safeLocale() {
 const chartEl = $('chart');
 const chart = LC.createChart(chartEl, {
   autoSize: true,
-  layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#8a94a8', fontFamily: 'Inter, system-ui, sans-serif' },
-  grid: { vertLines: { color: 'rgba(255,255,255,0.035)' }, horzLines: { color: 'rgba(255,255,255,0.035)' } },
-  rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
-  timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false, rightOffset: 10 },
-  crosshair: {
-    mode: LC.CrosshairMode.Normal,
-    vertLine: { color: 'rgba(245,196,81,0.45)', style: LC.LineStyle.Dashed, labelBackgroundColor: '#1a2133' },
-    horzLine: { color: 'rgba(245,196,81,0.45)', style: LC.LineStyle.Dashed, labelBackgroundColor: '#1a2133' },
-  },
+  layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#c3bde0', fontFamily: 'Inter, system-ui, sans-serif' },
+  grid: { vertLines: { color: 'rgba(255,255,255,0.05)' }, horzLines: { color: 'rgba(255,255,255,0.05)' } },
+  rightPriceScale: { borderColor: 'rgba(255,255,255,0.16)' },
+  timeScale: { borderColor: 'rgba(255,255,255,0.16)', timeVisible: true, secondsVisible: false, rightOffset: 14 },
+  crosshair: { mode: LC.CrosshairMode.Normal, vertLine: { color: 'rgba(196,181,253,0.6)', labelBackgroundColor: '#2a1a5e' }, horzLine: { color: 'rgba(196,181,253,0.6)', labelBackgroundColor: '#2a1a5e' } },
   localization: { locale: safeLocale(), priceFormatter: (p) => p.toFixed(2) },
 });
-const candleSeries = chart.addCandlestickSeries({
-  upColor: '#22e3a1', downColor: '#ff4d6d', borderVisible: false, wickUpColor: '#22e3a1', wickDownColor: '#ff4d6d',
-  priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-});
-candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom: 0.18 } });
+const candleSeries = chart.addCandlestickSeries({ upColor: UP, downColor: DN, borderVisible: false, wickUpColor: UP, wickDownColor: DN, priceFormat: { type: 'price', precision: 2, minMove: 0.01 } });
+candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.08, bottom: 0.2 } });
 const volumeSeries = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
-chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.86, bottom: 0 } });
-const vwapSeries = chart.addLineSeries({ color: '#f5c451', lineWidth: 1, lineStyle: LC.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+const vwapSeries = chart.addLineSeries({ color: '#c4b5fd', lineWidth: 1, lineStyle: LC.LineStyle.Dotted, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
 const overlay = new Overlay(chartEl.parentElement, $('overlay'), chart, candleSeries);
-
-// Volume bars coloured by who was aggressive (taker delta) when that data exists.
-const volBar = (c) => {
-  const up = c.buyVolume != null ? c.buyVolume * 2 >= c.volume : c.close >= c.open;
-  return { time: c.time, value: c.volume || 0, color: up ? 'rgba(34,227,161,0.32)' : 'rgba(255,77,109,0.32)' };
-};
 const bar = (c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close });
 
-function closedCandles(candles, tfId) {
-  const last = candles[candles.length - 1];
-  return last && last.time === bucketStart(TF[tfId], nowSec()) ? candles.slice(0, -1) : candles;
+// Candles with at least twice the average volume where one side clearly dominated.
+function findSurges(c) {
+  const out = [];
+  let sum = 0;
+  for (let i = 0; i < c.length; i++) {
+    if (i >= 20) {
+      const avg = sum / 20;
+      const v = c[i].volume || 0;
+      const share = c[i].buyVolume != null && v ? c[i].buyVolume / v : null;
+      if (avg > 0 && v >= 2.5 * avg && share != null && (share >= 0.6 || share <= 0.4)) out.push({ index: i, side: share >= 0.6 ? 'buy' : 'sell', mult: v / avg });
+      sum -= c[i - 20].volume || 0;
+    }
+    sum += c[i].volume || 0;
+  }
+  return out;
+}
+
+function volBars(c, surges) {
+  const hot = new Map(surges.map((s) => [s.index, s.side]));
+  return c.map((x, i) => {
+    const side = hot.get(i);
+    const up = x.buyVolume != null ? x.buyVolume * 2 >= x.volume : x.close >= x.open;
+    return { time: x.time, value: x.volume || 0, color: side ? (side === 'buy' ? UP : DN) : up ? 'rgba(52,245,197,0.28)' : 'rgba(255,95,162,0.28)' };
+  });
+}
+
+function closedCandles() {
+  const c = state.candles;
+  const last = c[c.length - 1];
+  return last && last.time === bucketStart(TF[state.tf], nowSec()) ? c.slice(0, -1) : c;
 }
 
 async function load({ soft = false } = {}) {
-  const tf = state.tf;
+  const { market, tf } = state;
   const seq = ++state.seq;
   if (!soft) $('loading').hidden = false;
   try {
-    const candles = await feed.candles(tf, 800);
+    const candles = await feed.candles(market, tf, 600);
     if (seq !== state.seq) return;
     const range = soft ? chart.timeScale().getVisibleLogicalRange() : null;
     state.candles = candles;
+    state.surges = findSurges(candles);
     candleSeries.setData(candles.map(bar));
-    volumeSeries.setData(candles.map(volBar));
+    volumeSeries.setData(volBars(candles, state.layers.surges ? state.surges : []));
     if (range) chart.timeScale().setVisibleLogicalRange(range);
-    if (!soft) chart.timeScale().scrollToRealTime();
+    else chart.timeScale().setVisibleLogicalRange({ from: candles.length - 110, to: candles.length + 12 });
     runAnalysis();
-    drawMarkers();
-    hideBanner();
+    $('banner').hidden = true;
   } catch (e) {
-    if (seq === state.seq) showBanner(`Could not load ${TF[tf].label} candles: ${e.message}`);
+    if (seq === state.seq) {
+      $('banner').textContent = `Could not load ${mk().label} ${TF[tf].label} candles: ${e.message}`;
+      $('banner').hidden = false;
+    }
   } finally {
     if (seq === state.seq) $('loading').hidden = true;
   }
-  if (!soft || Date.now() - (state.htfAt || 0) > 5 * 60000) loadHTF(seq);
-}
-
-async function loadHTF(seq) {
-  const htfId = HTF_OF[state.tf];
-  state.htfAt = Date.now();
-  if (!htfId) {
-    state.htf = null;
-    pushOverlay();
-    renderBias();
-    return;
-  }
-  try {
-    const c = await feed.candles(htfId, 500);
-    if (seq !== state.seq && HTF_OF[state.tf] !== htfId) return;
-    const r = analyze(closedCandles(c, htfId), { tf: TF[htfId] });
-    state.htf = r ? { tf: TF[htfId].label, zones: r.zones, trend: r.trend } : null;
-  } catch {
-    state.htf = null;
-  }
-  pushOverlay();
-  renderBias();
 }
 
 function runAnalysis() {
   const tf = TF[state.tf];
-  state.result = analyze(closedCandles(state.candles, state.tf), { tf });
+  state.result = analyze(closedCandles(), { tf });
   vwapSeries.setData(state.layers.vwap ? vwap(state.candles, vwapAnchor(tf)) : []);
   pushOverlay();
   renderBias();
   renderLiq();
 }
 
+const play = () => state.bots[state.market]?.tfs?.[state.tf];
+
 function pushOverlay() {
-  const b = state.bot;
-  const trade = b ? { areas: b.areas, triggers: b.triggers, live: b.signals, history: b.recent.slice(-30) } : null;
-  overlay.update({ candles: state.candles, result: state.result, htf: state.htf, layers: state.layers, trade });
+  const b = play();
+  const first = state.candles[0]?.time ?? 0;
+  const trade = b && !b.pending ? {
+    areas: b.areas,
+    triggers: b.triggers,
+    live: [...b.signals, ...b.watch],
+    history: b.recent.filter((t) => t.entryTime >= first).slice(-25),
+    surges: state.layers.surges ? (state.surges || []).slice(-5) : [],
+  } : { surges: state.layers.surges ? (state.surges || []).slice(-5) : [] };
+  overlay.update({ candles: state.candles, result: state.result, htf: null, layers: state.layers, trade });
 }
 
 function renderBias() {
   const r = state.result;
+  const b = play();
   const chip = (label, trend) => `<span class="chip ${trend || ''}">${label} ${trend === 'bull' ? '▲ Bullish' : trend === 'bear' ? '▼ Bearish' : '· Ranging'}</span>`;
   $('bias').innerHTML = [
     r ? chip(TF[state.tf].label, r.trend) : '',
-    state.htf ? chip(state.htf.tf, state.htf.trend) : '',
     r ? `<span class="chip">ATR ${fmt(r.atr)}</span>` : '',
+    b && !b.pending ? `<span class="chip">${b.stats.filter((s) => s.active).length ? 'Strategy proven · trading' : 'Strategy on watch · not traded'}</span>` : '<span class="chip">Backtesting…</span>',
   ].join('');
-}
-
-// Bot entries on the trade finder's timeframe, labelled with grade and result.
-function drawMarkers() {
-  const b = state.bot;
-  // With the signals layer on, trades are drawn as boxes instead of arrows.
-  if (!b || state.tf !== b.tf || state.layers.signals) {
-    candleSeries.setMarkers([]);
-    return;
-  }
-  const first = state.candles[0]?.time ?? 0;
-  const list = [...b.recent, ...b.signals, ...(b.watch || [])].filter((t) => t.entryTime && t.entryTime >= first);
-  candleSeries.setMarkers(list.map((t) => {
-    const long = t.dir === 'bull';
-    const res = t.status === 'closed' ? ` ${t.r > 0 ? '+' : ''}${t.r.toFixed(1)}R` : ' live';
-    return { time: t.entryTime, position: long ? 'belowBar' : 'aboveBar', color: long ? '#22e3a1' : '#ff4d6d', shape: long ? 'arrowUp' : 'arrowDown', text: `${t.grade || ''}${res}` };
-  }).sort((x, y) => x.time - y.time));
-}
-
-let planLines = [];
-function drawPlan(t) {
-  planLines.forEach((l) => candleSeries.removePriceLine(l));
-  planLines = [];
-  if (!t) return;
-  const add = (price, color, title, style = LC.LineStyle.Dashed) => planLines.push(candleSeries.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title }));
-  add(t.entry, '#f5c451', `${t.dir === 'bull' ? 'LONG' : 'SHORT'} ${t.grade || ''}`, LC.LineStyle.Solid);
-  add(t.stop, '#ff4d6d', 'SL');
-  add(t.target, '#22e3a1', 'TP');
 }
 
 let wallLines = [];
@@ -218,461 +195,467 @@ function drawWalls() {
   wallLines = [];
   const book = state.flow?.book;
   if (!book || !state.layers.walls) return;
-  const top = (walls) => walls.slice().sort((a, b) => b.size - a.size).slice(0, 2);
-  for (const w of top(book.bidWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(34,227,161,0.55)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `bid wall ${compact(w.size)}` }));
-  for (const w of top(book.askWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(255,77,109,0.55)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `ask wall ${compact(w.size)}` }));
+  const top = (w) => w.slice().sort((a, b) => b.size - a.size).slice(0, 2);
+  for (const w of top(book.bidWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(52,245,197,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `bid wall ${compact(w.size)}` }));
+  for (const w of top(book.askWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(255,95,162,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `ask wall ${compact(w.size)}` }));
 }
 
-// ---- Toolbar ---------------------------------------------------------------------
+// ---- Header ---------------------------------------------------------------------
 
-function renderToolbar() {
+function renderHeader() {
+  $('mtabs').innerHTML = state.cfg.markets.map((m) => {
+    const b = state.bots[m.id];
+    const sig = b ? Object.values(b.tfs).flatMap((t) => t.signals || []).find((s) => s.status === 'pending' || s.status === 'open') : null;
+    return `<button type="button" data-m="${m.id}" aria-pressed="${m.id === state.market}">${esc(m.label)}<span class="p" id="mp-${m.id}">${fmt(state.prices[m.id])}</span>${sig ? `<span class="sig ${sig.dir}">${sig.dir === 'bull' ? 'BUY' : 'SELL'}</span>` : ''}</button>`;
+  }).join('');
+  $('tfs').innerHTML = TFS.map((t) => `<button type="button" data-tf="${t}" aria-pressed="${t === state.tf}">${TF[t].label}</button>`).join('');
   $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
-  $('layers').hidden = state.view === 'tv';
-  $('bias').hidden = state.view === 'tv';
-  $('tfs').innerHTML = TIMEFRAMES.filter((t) => CHART_TFS.includes(t.id)).map((t) => `<button type="button" data-tf="${t.id}" aria-pressed="${t.id === state.tf}">${t.label}</button>`).join('');
-  $('layers').innerHTML = LAYERS.map((l) => `<button type="button" data-layer="${l.id}" aria-pressed="${!!state.layers[l.id]}"><span class="sw" style="background:${l.color}"></span>${l.label}</button>`).join('');
+  $('layers').innerHTML = LAYERS.map((l) => `<button type="button" data-layer="${l.id}" aria-pressed="${!!state.layers[l.id]}">${l.label}</button>`).join('');
+  $('layers').hidden = $('bias').hidden = state.view === 'tv';
 }
 
-$('tfs').addEventListener('click', (e) => {
-  const tf = e.target.closest('button')?.dataset.tf;
-  if (!tf || tf === state.tf) return;
+function renderPills() {
+  const s = sessionsNow();
+  const kill = s.find((x) => x.killzone);
+  const open = s.filter((x) => x.open).map((x) => x.name);
+  const m = mk();
+  $('pills').innerHTML = [
+    state.cfg.demo ? '<span class="pill demo">DEMO DATA</span>' : `<span class="pill" title="Price feed">${esc(m.source || '')}</span>`,
+    `<span class="pill ${state.streamOn ? 'on' : ''}" title="Live trade stream for whales and order flow">${state.streamOn ? 'Trades: live stream' : 'Trades: 3 s refresh'}</span>`,
+    kill ? `<span class="pill kill">${kill.name} open · killzone</span>` : `<span class="pill ${open.length ? 'on' : ''}">${open.length ? open.join(' + ') : 'Sessions closed'}</span>`,
+  ].join('');
+}
+
+function switchTo(market, tf) {
+  if (market === state.market && tf === state.tf) return;
+  const marketChanged = market !== state.market;
+  state.market = market;
   state.tf = tf;
-  state.result = null;
-  state.htf = null;
+  store.set('market', market);
   store.set('tf', tf);
-  renderToolbar();
+  state.result = null;
+  state.heroKey = '';
+  if (marketChanged) {
+    state.flow = null;
+    state.tape = [];
+    state.whaleList = [];
+    $('whales').innerHTML = '';
+    $('price').textContent = fmt(state.prices[market]);
+  }
+  renderHeader();
+  renderPills();
+  renderChange();
   load();
   loadFlow();
+  renderHero();
+  renderScore();
+  renderNews();
   if (state.view === 'tv') showTradingView();
-});
-
-// ---- TradingView chart ------------------------------------------------------------
-
-// TradingView's free Advanced Chart widget: their prices, chart and drawing tools.
-const TV_INTERVAL = { M1: '1', M5: '5', M15: '15', M30: '30', H1: '60', H4: '240', D1: 'D', W1: 'W' };
-
-function showTradingView() {
-  const el = $('tv');
-  el.innerHTML = '<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div></div>';
-  let tz = 'Etc/UTC';
-  try {
-    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz;
-  } catch { /* default */ }
-  const s = document.createElement('script');
-  s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  s.async = true;
-  s.text = JSON.stringify({
-    autosize: true,
-    symbol: state.cfg.tvSymbol || 'OANDA:XAUUSD',
-    interval: TV_INTERVAL[state.tf] || '15',
-    timezone: tz === 'UTC' ? 'Etc/UTC' : tz,
-    theme: 'dark',
-    style: '1',
-    locale: 'en',
-    backgroundColor: '#05070d',
-    gridColor: 'rgba(255, 255, 255, 0.04)',
-    allow_symbol_change: true,
-    save_image: true,
-    calendar: false,
-    support_host: 'https://www.tradingview.com',
-  });
-  s.onerror = () => {
-    el.innerHTML = '<p class="banner tv-fail">Could not load the TradingView chart. Check your connection or ad blocker, or switch back to the Pulse chart.</p>';
-  };
-  el.firstChild.appendChild(s);
 }
 
-function setView(view) {
-  state.view = view;
-  store.set('view', view);
-  $('tv').hidden = view !== 'tv';
-  if (view === 'tv') showTradingView();
-  else $('tv').innerHTML = '';
-  renderToolbar();
-}
-
-$('views').addEventListener('click', (e) => {
-  const v = e.target.closest('button')?.dataset.view;
-  if (v && v !== state.view) setView(v);
+$('mtabs').addEventListener('click', (e) => {
+  const m = e.target.closest('button')?.dataset.m;
+  if (m) switchTo(m, state.tf);
 });
-
+$('tfs').addEventListener('click', (e) => {
+  const tf = e.target.closest('button')?.dataset.tf;
+  if (tf) switchTo(state.market, tf);
+});
 $('layers').addEventListener('click', (e) => {
   const id = e.target.closest('button')?.dataset.layer;
   if (!id) return;
   state.layers[id] = !state.layers[id];
+  if (id === 'zones') state.layers.ob = state.layers.zones;
   store.set('layers', state.layers);
-  renderToolbar();
+  renderHeader();
   if (id === 'vwap') vwapSeries.setData(state.layers.vwap ? vwap(state.candles, vwapAnchor(TF[state.tf])) : []);
   if (id === 'walls') drawWalls();
-  if (id === 'signals') drawMarkers();
-  if (id === 'htf' && state.layers.htf && !state.htf) loadHTF(state.seq);
+  if (id === 'surges') volumeSeries.setData(volBars(state.candles, state.layers.surges ? state.surges : []));
   pushOverlay();
 });
 
-// ---- Live price -----------------------------------------------------------------
+// TradingView's free Advanced Chart widget.
+const TV_INTERVAL = { M1: '1', M5: '5', M15: '15' };
+function showTradingView() {
+  const el = $('tv');
+  el.innerHTML = '<div class="tradingview-widget-container"><div class="tradingview-widget-container__widget"></div></div>';
+  const s = document.createElement('script');
+  s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  s.async = true;
+  s.text = JSON.stringify({ autosize: true, symbol: mk().tv, interval: TV_INTERVAL[state.tf], timezone: 'Etc/UTC', theme: 'dark', style: '1', locale: 'en', backgroundColor: '#0b0720', allow_symbol_change: true, calendar: false, support_host: 'https://www.tradingview.com' });
+  s.onerror = () => { el.innerHTML = '<p class="banner">Could not load the TradingView chart. Check your connection or ad blocker.</p>'; };
+  el.firstChild.appendChild(s);
+}
+$('views').addEventListener('click', (e) => {
+  const v = e.target.closest('button')?.dataset.view;
+  if (!v || v === state.view) return;
+  state.view = v;
+  store.set('view', v);
+  $('tv').hidden = v !== 'tv';
+  if (v === 'tv') showTradingView();
+  else $('tv').innerHTML = '';
+  renderHeader();
+});
+
+// ---- Live prices and trades -------------------------------------------------------
 
 let refreshTimer = null;
-function onTick({ t, p }) {
-  const prev = state.price;
-  state.price = p;
+function onPrice(market, p, t = nowSec()) {
+  const prev = state.prices[market];
+  state.prices[market] = p;
+  const tab = $(`mp-${market}`);
+  if (tab) tab.textContent = fmt(p);
+  if (market !== state.market) return;
   const el = $('price');
   el.textContent = fmt(p);
   if (prev != null && p !== prev) flash(el, p - prev);
   renderChange();
   const c = state.candles;
   const last = c[c.length - 1];
-  if (last) {
-    const b = bucketStart(TF[state.tf], t);
-    if (b === last.time) {
-      last.high = Math.max(last.high, p);
-      last.low = Math.min(last.low, p);
-      last.close = p;
-      candleSeries.update(bar(last));
-    } else if (b > last.time) {
-      const fresh = { time: b, open: p, high: p, low: p, close: p, volume: 0 };
-      c.push(fresh);
-      candleSeries.update(bar(fresh));
-      runAnalysis();
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => {
-        load({ soft: true });
-        loadBot();
-      }, 2000 + Math.random() * 2000);
-    }
+  if (!last) return;
+  const b = bucketStart(TF[state.tf], t);
+  if (b === last.time) {
+    last.high = Math.max(last.high, p);
+    last.low = Math.min(last.low, p);
+    last.close = p;
+    candleSeries.update(bar(last));
+  } else if (b > last.time) {
+    const fresh = { time: b, open: p, high: p, low: p, close: p, volume: 0 };
+    c.push(fresh);
+    candleSeries.update(bar(fresh));
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      load({ soft: true });
+      loadBots();
+    }, 2500);
   }
-  renderPositions();
 }
 
 function renderChange() {
-  const ch = $('change');
-  if (state.price == null || !state.dayOpen) return;
-  const d = state.price - state.dayOpen;
-  ch.textContent = `${signed(d)} (${signed((d / state.dayOpen) * 100)}%)`;
-  ch.className = `chg ${d >= 0 ? 'up' : 'down'}`;
+  const p = state.prices[state.market];
+  const o = state.dayOpen[state.market];
+  const el = $('change');
+  if (p == null || !o) {
+    el.textContent = '';
+    return;
+  }
+  const d = p - o;
+  el.textContent = `${signed(d)} (${signed((d / o) * 100)}%)`;
+  el.className = `chg ${d >= 0 ? 'bull' : 'bear'}`;
 }
 
 async function loadDayOpen() {
-  try {
-    const days = await feed.candles('D1', 5);
-    state.dayOpen = days[days.length - 1]?.open ?? null;
-    renderChange();
-  } catch { /* header change stays blank */ }
+  for (const m of state.cfg.markets) {
+    try {
+      const days = await feed.candles(m.id, 'D1', 3);
+      state.dayOpen[m.id] = days[days.length - 1]?.open ?? null;
+    } catch { /* change stays blank */ }
+  }
+  renderChange();
 }
 
-function connect() {
-  const dot = $('liveDot');
-  feed.subscribe((d) => {
-    if (d.error) {
-      dot.className = 'live-dot err';
-      dot.title = `Price feed error: ${d.error}`;
-      return;
-    }
-    dot.className = 'live-dot on';
-    dot.title = 'Live';
-    onTick(d);
-  }, () => {
-    dot.className = 'live-dot err';
-    dot.title = 'Reconnecting…';
-  });
+let tapeDirty = false;
+function onTrade(market, t) {
+  onPrice(market, t.price + (market === state.market ? (state.flow?.basis || 0) : 0), Math.floor(t.time));
+  if (market !== state.market) return;
+  state.tape.push(t);
+  tapeDirty = true;
+  const min = state.whaleMin[market];
+  if (min && t.size >= min) addWhale({ ...t, price: t.price + (state.flow?.basis || 0), notional: t.size * t.price }, true);
 }
 
-function renderSessions() {
-  const list = sessionsNow();
-  const gold = goldOpen();
-  $('sessions').innerHTML = `<span class="sess ${gold ? 'open' : ''}">Gold ${gold ? 'open' : 'closed'}</span>`
-    + list.map((s) => `<span class="sess ${s.open ? 'open' : ''} ${s.killzone ? 'kill' : ''}">${s.name}${s.killzone ? '<span class="kz">KILLZONE</span>' : ''}</span>`).join('');
-}
-
-// ---- Best setup -------------------------------------------------------------------
+// ---- Setup panel -------------------------------------------------------------------
 
 function candidates() {
-  const b = state.bot;
-  if (!b) return { list: [], tradable: false };
-  const order = (a, z) => (a.status === 'pending' ? 0 : 1) - (z.status === 'pending' ? 0 : 1) || z.score - a.score || z.signalTime - a.signalTime;
-  if (b.signals.length) return { list: b.signals.slice().sort(order), tradable: true };
-  return { list: (b.watch || []).slice().sort(order), tradable: false };
+  const b = state.bots[state.market];
+  if (!b) return { list: [], ready: false };
+  const plays = Object.values(b.tfs).filter((t) => !t.pending);
+  const order = (a, z) => (a.status === 'pending' ? 0 : 1) - (z.status === 'pending' ? 0 : 1) || z.signalTime - a.signalTime;
+  const sig = plays.flatMap((t) => t.signals).sort(order);
+  if (sig.length) return { list: sig, tradable: true, ready: true };
+  return { list: plays.flatMap((t) => t.watch).sort(order), tradable: false, ready: plays.length > 0 };
 }
 
 function renderHero() {
-  const b = state.bot;
+  const b = state.bots[state.market];
   const el = $('hero');
   if (!b) return;
-  const { list, tradable } = candidates();
+  const { list, tradable, ready } = candidates();
   const best = list[0];
-  const key = best ? `${sigId(best)}:${best.status}:${tradable}` : `none:${b.stats.some((s) => s.active)}:${JSON.stringify([b.areas, b.triggers])}:${b.recent.length}`;
+  const waits = Object.entries(b.tfs).flatMap(([tf, t]) => (t.pending ? [] : [
+    ...t.areas.map((a) => `<div class="wait ${a.dir}">${TF[tf].label} · ${a.dir === 'bull' ? 'BUY' : 'SELL'} AREA ${fmt(a.bottom)}–${fmt(a.top)}<span>${esc(a.kind)} retest · SL ${fmt(a.stop)} · TP ${fmt(a.target)}</span></div>`),
+    ...t.triggers.map((g) => `<div class="wait ${g.dir}">${TF[tf].label} · ${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}<span>on a high-volume breakout at the London/NY open</span></div>`),
+  ]));
+  const key = best ? `${sigId(best)}:${best.status}:${tradable}` : `none:${ready}:${waits.join('').length}:${Object.values(b.tfs).map((t) => (t.pending ? 'p' : 'r')).join('')}`;
   if (key === state.heroKey) return;
   state.heroKey = key;
   if (!best) {
-    const nextClose = (Math.floor(nowSec() / 900) + 1) * 900;
-    $('heroMeta').textContent = `next check ${clock(nextClose)}`;
-    const waits = [
-      ...(b.areas || []).map((a) => `<div class="wait ${a.dir}"><b>${a.dir === 'bull' ? 'BUY' : 'SELL'} AREA</b> ${fmt(a.bottom)}–${fmt(a.top)}<span>${esc(a.kind)} retest · SL ${fmt(a.stop)} · TP ${fmt(a.target)}</span></div>`),
-      ...(b.triggers || []).map((g) => `<div class="wait ${g.dir}"><b>${g.dir === 'bull' ? 'BUY above' : 'SELL below'}</b> ${fmt(g.price)}<span>only on a high-volume breakout at the London/NY open</span></div>`),
-    ].join('');
-    const last = b.recent[b.recent.length - 1];
-    el.innerHTML = `<div class="scan"><div class="radar"></div><h3>Waiting for price</h3>
-      <p>${b.stats.some((s) => s.active) ? 'No signal right now. The strategies check every closed 15m candle and signal only at these levels:' : 'No strategy has proven an edge on the tested history yet, so nothing is signalled.'}</p></div>
-      ${waits ? `<div class="waits">${waits}</div>` : ''}
-      ${last ? `<div class="expect">Last signal: <b class="${last.dir}">${last.dir === 'bull' ? 'BUY' : 'SELL'}</b> ${esc(stratName(last.strategy))} at ${fmt(last.entry)}, ${ago(last.signalTime)}, closed <b class="${last.r > 0 ? 'bull' : 'bear'}">${signed(last.r)}R</b>.</div>` : ''}`;
-    drawPlan(null);
+    const testing = Object.entries(b.tfs).filter(([, t]) => t.pending).map(([tf]) => TF[tf].label);
+    $('heroMeta').textContent = '';
+    el.innerHTML = `<div class="radar"></div><div class="center"><b>Scanning 1m · 5m · 15m</b></div>
+      <div class="center muted small">${testing.length ? `Backtesting ${testing.join(', ')} on real history. This takes a few minutes after a restart.` : 'No setup right now. Every closed candle is checked for a zone touch, a trap or a breakout, then verified with volume, liquidity and order flow.'}</div>
+      ${waits.slice(0, 4).join('')}`;
     return;
   }
   const t = best;
   const long = t.dir === 'bull';
   const risk = Math.abs(t.entry - t.stop);
-  const exp = t.expected;
-  $('heroMeta').textContent = `found ${ago(t.signalTime + 900)}`;
-  const tag = !tradable ? '<span class="tag watch">WATCH ONLY</span>' : t.status === 'pending' ? '<span class="tag new">NEW</span>' : '<span class="tag run">RUNNING</span>';
+  const okCount = t.factors.filter((f) => f.ok).length;
+  $('heroMeta').textContent = `${TF[t.tf].label} · ${ago(t.signalTime + TF[t.tf].sec)}`;
   el.innerHTML = `
-    <div class="setup">
-      ${ring(t.score)}
-      <div>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span class="grade ${t.grade}" title="Confluence grade">${t.grade}</span>${tag}</div>
-        <div class="dir ${t.dir}"><span class="arrow">${long ? '▲' : '▼'}</span>${long ? 'LONG' : 'SHORT'}</div>
-        <div class="strat">${esc(stratName(t.strategy))}</div>
-        <div class="why">${esc(t.why)}</div>
-      </div>
-    </div>
-    <div class="levels">
-      <div class="lv"><span>${t.status === 'open' ? 'Entered' : 'Entry ≈'}</span><b>${fmt(t.entry)}</b></div>
-      <div class="lv sl"><span>Stop</span><b>${fmt(t.stop)}</b><i>−$${fmt(risk)}</i></div>
-      <div class="lv tp"><span>Target</span><b>${fmt(t.target)}</b><i>+${fmt(Math.abs(t.target - t.entry) / risk, 1)}R</i></div>
-    </div>
-    ${exp && exp.trades ? `<div class="expect">In the backtest, grade <b>${t.grade}</b> setups won <b>${pct(exp.winRate)}</b> of <b>${exp.trades}</b> trades, averaging <b class="${exp.expR >= 0 ? 'bull' : 'bear'}">${signed(exp.expR)}R</b> each.${!tradable ? ' This strategy is not proven yet, so the auto-trader will not take it.' : ''}</div>` : ''}
-    <ul class="factors">${t.factors.map((f, i) => `<li class="${f.ok ? 'ok' : 'no'}" style="--i:${i}"><span class="chk">${f.ok ? '✓' : '·'}</span>${esc(f.label)}<span class="w">+${f.weight}</span></li>`).join('')}</ul>
-    ${list.length > 1 ? `<div class="others">${list.slice(1, 4).map((o) => `<div class="other"><span class="grade ${o.grade}" style="min-width:22px;height:22px;font-size:12px">${o.grade}</span><span class="${o.dir}">${o.dir === 'bull' ? '▲' : '▼'}</span>${esc(stratName(o.strategy))}<span class="muted" style="margin-left:auto">${o.score}</span></div>`).join('')}</div>` : ''}`;
+    <div class="sig-head">${ring(t.score, { size: 84, stroke: 8, label: 'score' })}
+      <div><div style="display:flex;gap:6px;margin-bottom:6px"><span class="tag ${!tradable ? 'watch' : t.status === 'open' ? 'run' : ''}">${!tradable ? 'WATCH ONLY' : t.status === 'open' ? 'RUNNING' : 'NEW'}</span><span class="tag watch">${TF[t.tf].label}</span></div>
+      <div class="dir ${t.dir}"><span class="arrow">${long ? '▲' : '▼'}</span>${long ? 'BUY' : 'SELL'}</div></div></div>
+    <div><b>${esc(stratName(t.strategy))}</b><div class="muted small">${esc(t.why)}</div></div>
+    <div class="lv3"><div><span>ENTRY</span>${fmt(t.entry)}</div><div class="bear"><span>STOP</span>${fmt(t.stop)}</div><div class="bull"><span>TARGET</span>${fmt(t.target)}</div></div>
+    <div class="note">Risk ${fmt(risk)} per ${esc(mk().unit)} for ${fmt(Math.abs(t.target - t.entry) / risk, 1)}R. <b>${okCount} of ${t.factors.length}</b> confluence checks passed.${tradable ? '' : ' This strategy has not passed the backtest gate, so the auto-trader will not take it.'}</div>
+    <ul class="checks">${t.factors.map((f, i) => `<li class="${f.ok ? 'ok' : 'no'}" style="--i:${i}"><b>✓</b>${esc(f.label)}</li>`).join('')}</ul>
+    ${t.tf !== state.tf ? `<button type="button" class="btn" id="goTf">Show on the ${TF[t.tf].label} chart</button>` : ''}`;
   animateRings(el);
-  drawPlan(t);
+  $('goTf')?.addEventListener('click', () => switchTo(state.market, t.tf));
 }
 
 function checkNewSignals() {
-  const b = state.bot;
-  const ids = new Set(b.signals.map(sigId));
+  const all = Object.entries(state.bots).flatMap(([m, b]) => Object.values(b.tfs).flatMap((t) => (t.signals || []).map((s) => ({ ...s, market: m }))));
+  const ids = new Set(all.map((s) => `${s.market}:${sigId(s)}`));
   const prev = state.seenSignals;
   state.seenSignals = ids;
   if (!prev) return;
-  for (const t of b.signals) {
-    if (prev.has(sigId(t)) || t.status !== 'pending') continue;
-    toast(`<b>New ${t.grade} setup:</b> ${t.dir === 'bull' ? 'LONG' : 'SHORT'} · ${esc(stratName(t.strategy))} · entry ≈ ${fmt(t.entry)}`);
+  for (const s of all) {
+    if (prev.has(`${s.market}:${sigId(s)}`) || s.status !== 'pending') continue;
+    const m = state.cfg.markets.find((x) => x.id === s.market);
+    toast(`<b>New ${esc(m?.label || s.market)} ${TF[s.tf].label} setup:</b> ${s.dir === 'bull' ? 'BUY' : 'SELL'} · ${esc(stratName(s.strategy))} · entry ≈ ${fmt(s.entry)}`);
     beep();
     if ('Notification' in window && Notification.permission === 'granted') {
       try {
-        new Notification(`Aurum Pulse · ${t.grade} ${t.dir === 'bull' ? 'LONG' : 'SHORT'}`, { body: `${stratName(t.strategy)} · entry ≈ ${fmt(t.entry)} · SL ${fmt(t.stop)} · TP ${fmt(t.target)}` });
-      } catch { /* notifications need a service worker on some phones */ }
+        new Notification(`${m?.label} ${s.dir === 'bull' ? 'BUY' : 'SELL'} · ${TF[s.tf].label}`, { body: `${stratName(s.strategy)} · entry ≈ ${fmt(s.entry)} · SL ${fmt(s.stop)} · TP ${fmt(s.target)}` });
+      } catch { /* needs a service worker on some phones */ }
     }
+    if (s.market === state.market && s.tf !== state.tf) switchTo(s.market, s.tf); // jump to the timeframe that fired
   }
 }
 
-// ---- Accuracy ------------------------------------------------------------------------
-
-function renderAccuracy() {
-  const b = state.bot;
+function renderScore() {
+  const b = state.bots[state.market];
   if (!b) return;
-  $('accMeta').textContent = `${b.days}-day backtest`;
-  const mode = state.paper?.minGrade;
-  $('grades').innerHTML = b.grades.map((g) => `
-    <div class="grow ${g.grade === mode ? 'mode' : ''}" title="Grade ${g.grade}: confluence score ${g.min}+">
-      <span class="grade ${g.grade}" style="min-width:26px;height:26px;font-size:13px">${g.grade}</span>
-      <div class="track"><div class="fillbar ${g.expR < 0 ? 'neg' : ''}" data-w="${(g.winRate * 100).toFixed(1)}"></div></div>
-      <div class="nums"><b>${g.trades ? pct(g.winRate) : '—'}</b> win · ${g.trades} trades · <span class="${g.expR >= 0 ? 'bull' : 'bear'}">${g.trades ? `${signed(g.expR)}R` : '—'}</span></div>
-    </div>`).join('');
-  requestAnimationFrame(() => requestAnimationFrame(() => $('grades').querySelectorAll('.fillbar').forEach((f) => { f.style.width = `${f.dataset.w}%`; })));
-  $('strategies').innerHTML = b.stats.map((s) => `<div class="srow" title="${esc(s.desc)}"><span class="n">${esc(s.name)}</span><span class="v">${s.trades} tr</span><span class="v ${s.expR >= 0 ? 'bull' : 'bear'}">${signed(s.expR)}R</span><span class="st ${s.active ? 'on' : 'off'}">${s.active ? 'ACTIVE' : 'OFF'}</span></div>`).join('');
-  $('recent').innerHTML = b.recent.slice().reverse().slice(0, 30).map((t) => `<li>
-    <time>${new Date(t.signalTime * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time>
-    <span><span class="${t.dir}">${t.dir === 'bull' ? '▲' : '▼'}</span> ${esc(stratName(t.strategy))}</span>
-    <span class="grade ${t.grade}" style="min-width:20px;height:20px;font-size:11px;border-radius:6px">${t.grade}</span>
-    <span class="r ${t.r > 0 ? 'bull' : 'bear'}">${signed(t.r)}R</span></li>`).join('') || '<li class="empty">No closed setups yet</li>';
+  $('scoreMeta').textContent = `${mk().label} · real history · re-tested every 6 hours`;
+  $('score').innerHTML = Object.entries(b.tfs).map(([tf, t]) => {
+    if (t.pending) return `<div class="sc"><div class="t">${TF[tf].label} · ${t.strategies.map(stratName).join(', ')}<span class="st off">${t.error ? 'ERROR' : 'TESTING'}</span></div><div class="n">${t.error ? esc(t.error) : 'Backtesting on real history…'}</div></div>`;
+    return t.stats.map((s) => `<div class="sc" title="${esc(s.desc)}"><div class="t">${TF[tf].label} · ${esc(s.name)}<span class="st ${s.active ? 'on' : 'off'}">${s.active ? 'TRADING' : 'WATCH ONLY'}</span></div>
+      <div class="n">${s.trades} trades in ${t.days} days · ${pct(s.winRate)} won · PF ${Number.isFinite(s.pf) ? s.pf.toFixed(2) : '∞'} · target ${s.rr}R</div>
+      <div class="n">Average <span class="${s.expR >= 0 ? 'bull' : 'bear'}">${signed(s.expR)}R</span> · total <span class="${s.totalR >= 0 ? 'bull' : 'bear'}">${signed(s.totalR, 1)}R</span> · worst drop ${fmt(s.maxDD, 1)}R · recent 40% <span class="${s.outSample.expR >= 0 ? 'bull' : 'bear'}">${signed(s.outSample.expR)}R</span></div></div>`).join('');
+  }).join('');
 }
 
-async function loadBot() {
-  try {
-    state.bot = await feed.bot();
-  } catch (e) {
-    $('hero').innerHTML = `<p class="bear small">Trade finder unavailable: ${esc(e.message)}</p>`;
-    return;
+async function loadBots() {
+  for (const m of state.cfg.markets) {
+    try {
+      state.bots[m.id] = await feed.bot(m.id);
+    } catch { /* retried on the next pass */ }
   }
   renderHero();
-  renderAccuracy();
+  renderScore();
+  renderHeader();
+  renderBias();
   checkNewSignals();
-  drawMarkers();
   pushOverlay();
 }
 
-// ---- Big players (COT) -------------------------------------------------------------
+// ---- Order flow, whales, liquidity ------------------------------------------------
 
-function renderCot() {
-  const c = state.cot;
-  const el = $('cot');
-  if (!c) return;
-  if (!c.available) {
-    el.innerHTML = '<p class="muted small">The CFTC report could not be loaded. It will retry shortly.</p>';
-    return;
-  }
-  const l = c.latest;
-  $('cotMeta').textContent = `report ${new Date(l.date * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
-  const idx = l.specIndex;
-  let insight;
-  if (idx >= 85) insight = 'Funds are close to their most bullish positioning in three years. The long side is crowded, so sharp shakeouts get more likely.';
-  else if (idx <= 15) insight = 'Funds are close to their most bearish positioning in three years. Historically that is a contrarian bullish setting.';
-  else if (l.specChange > 0) insight = `Funds added ${compact(l.specChange)} net long contracts last week: big money is buying.`;
-  else if (l.specChange < 0) insight = `Funds cut ${compact(-l.specChange)} net long contracts last week: big money is reducing exposure.`;
-  else insight = 'Funds left their positioning unchanged last week.';
-  const w = state.flow?.whales;
-  const wt = w ? w.buyVol + w.sellVol : 0;
-  el.innerHTML = `
-    ${gauge(idx, { lo: '3-yr short', hi: '3-yr long' })}
-    <div class="gauge-cap"><b id="cotIdx">0</b> <span class="muted small">COT index · hedge funds</span></div>
-    <div class="stat-grid">
-      <div class="stat"><span>Funds net long</span><b>${compact(l.specNet)}</b> <i class="${l.specChange >= 0 ? 'bull' : 'bear'}">${l.specChange >= 0 ? '▲' : '▼'} ${compact(Math.abs(l.specChange))}</i></div>
-      <div class="stat"><span>Banks & producers net</span><b>${compact(l.commNet)}</b> <i class="${l.commChange >= 0 ? 'bull' : 'bear'}">${l.commChange >= 0 ? '▲' : '▼'} ${compact(Math.abs(l.commChange))}</i></div>
-    </div>
-    <div class="spark-wrap" title="Funds net position, 3 years">${spark(c.series.map((r) => r.specNet), { cls: 'gold' })}</div>
-    <div class="insight">${insight}${wt ? ` Right now whales are <b class="${w.buyVol >= w.sellVol ? 'bull' : 'bear'}">${pct(Math.max(w.buyVol, w.sellVol) / wt)} ${w.buyVol >= w.sellVol ? 'buying' : 'selling'}</b> in large trades.` : ''}</div>`;
-  requestAnimationFrame(() => requestAnimationFrame(() => el.querySelector('.needle')?.classList.add('set')));
-  tween($('cotIdx'), idx, (v) => v.toFixed(0), 1400);
-}
-
-async function loadCot() {
-  try {
-    state.cot = await feed.cot();
-    renderCot();
-  } catch { /* retried on the next interval */ }
-}
-
-// ---- Order flow, liquidity, whales ----------------------------------------------------
-
-let flowKey = null;
+let flowKey = '';
 function renderFlow() {
   const f = state.flow;
   const el = $('flow');
   if (!f) return;
   if (!f.available) {
-    el.innerHTML = '<p class="muted small">Order flow is off (FLOW_PROVIDER=none).</p>';
+    el.innerHTML = '<p class="empty">Order flow is off for this market.</p>';
     return;
   }
   $('flowMeta').textContent = f.source;
+  if (!el.querySelector('.bar2')) {
+    el.innerHTML = `<div><div class="labels"><span class="bull">Buyers <b id="buyPct"></b></span><span class="muted small" id="tapeSpan"></span><span class="bear">Sellers <b id="sellPct"></b></span></div><div class="bar2"><i id="buyBar" style="width:50%"></i></div></div>
+      <div id="deltaChart"></div><div id="flowRows" class="stack" style="gap:4px"></div>`;
+  }
+  renderTapeSplit();
   const rows = f.delta.slice(-48);
   const last = rows[rows.length - 1];
-  const cvdTrend = rows.length > 8 ? rows[rows.length - 1].cvd - rows[rows.length - 9].cvd : 0;
-  const key = `${last?.time}:${last?.delta}`;
-  if (!el.querySelector('.split')) {
-    el.innerHTML = `
-      <div class="split"><div class="labels"><span class="bull">Buyers <b id="buyPct"></b></span><span class="muted small" id="tapeSpan"></span><span class="bear">Sellers <b id="sellPct"></b></span></div>
-        <div class="bar2"><div class="b" id="buyBar" style="width:50%"></div><div class="s"></div></div></div>
-      <div id="deltaChart"></div>
-      <div class="legend"><span><i style="background:var(--bull)"></i>Delta per ${TF[state.tf].label} candle</span><span><i style="background:var(--gold)"></i>Cumulative delta</span></div>
-      <div class="stat-grid" id="flowStats"></div>`;
-  }
-  const bp = f.tape.buyPct;
-  tween($('buyPct'), bp * 100, (v) => `${v.toFixed(0)}%`);
-  tween($('sellPct'), (1 - bp) * 100, (v) => `${v.toFixed(0)}%`);
-  $('buyBar').style.width = `${(bp * 100).toFixed(1)}%`;
-  $('tapeSpan').textContent = f.tape.from ? `last ${Math.max(1, Math.round((f.tape.to - f.tape.from) / 60))} min` : '';
+  const key = `${state.market}:${state.tf}:${last?.time}:${last?.delta}`;
   if (key !== flowKey) {
     flowKey = key;
-    $('deltaChart').innerHTML = deltaChart(rows);
+    $('deltaChart').innerHTML = deltaChart(rows, { h: 96 });
   }
-  $('flowStats').innerHTML = last ? `
-    <div class="stat"><span>Last candle delta</span><b class="${last.delta >= 0 ? 'bull' : 'bear'}">${signed(last.delta, 1)}</b> <i class="muted">${pct(last.buyPct)} buy</i></div>
-    <div class="stat"><span>CVD, last 8 candles</span><b class="${cvdTrend >= 0 ? 'bull' : 'bear'}">${cvdTrend >= 0 ? 'Rising ▲' : 'Falling ▼'}</b></div>` : '';
+  const trend = rows.length > 8 ? rows[rows.length - 1].cvd - rows[rows.length - 9].cvd : 0;
+  const surge = (state.surges || []).filter((s) => s.index >= state.candles.length - 3).pop();
+  $('flowRows').innerHTML = last ? `
+    <div class="row"><span>Delta, this ${TF[state.tf].label} candle</span><b class="mono ${last.delta >= 0 ? 'bull' : 'bear'}">${signed(last.delta, 2)} ${esc(mk().unit)}</b></div>
+    <div class="row"><span>Cumulative delta (8 candles)</span><b class="${trend >= 0 ? 'bull' : 'bear'}">${trend >= 0 ? 'Rising ▲' : 'Falling ▼'}</b></div>
+    <div class="row"><span>Volume surge</span><b class="${surge ? (surge.side === 'buy' ? 'bull' : 'bear') : 'muted'}">${surge ? `${surge.side === 'buy' ? 'Buyers' : 'Sellers'} ${surge.mult.toFixed(1)}× average` : 'None now'}</b></div>` : '';
+}
+
+// Buyer/seller split: the last 60 s of the live stream, or the server's recent tape.
+function renderTapeSplit() {
+  if (!$('buyBar')) return;
+  let bp;
+  let label;
+  const cut = Date.now() / 1000 - 60;
+  state.tape = state.tape.filter((t) => t.time >= cut);
+  if (state.streamOn && state.tape.length >= 5) {
+    let buy = 0;
+    let all = 0;
+    for (const t of state.tape) {
+      all += t.size;
+      if (t.side === 'buy') buy += t.size;
+    }
+    bp = all ? buy / all : 0.5;
+    label = `last 60 s · ${state.tape.length} trades`;
+  } else if (state.flow?.tape) {
+    bp = state.flow.tape.buyPct;
+    label = state.flow.tape.from ? `last ${Math.max(1, Math.round((state.flow.tape.to - state.flow.tape.from) / 60))} min` : '';
+  } else return;
+  tween($('buyPct'), bp * 100, (v) => `${v.toFixed(0)}%`, 400);
+  tween($('sellPct'), (1 - bp) * 100, (v) => `${v.toFixed(0)}%`, 400);
+  $('buyBar').style.width = `${(bp * 100).toFixed(1)}%`;
+  $('tapeSpan').textContent = label;
+}
+
+function addWhale(t, fresh) {
+  const k = `${t.time}:${t.price}:${t.size}`;
+  if (state.whaleList.some((w) => w.k === k)) return;
+  state.whaleList.unshift({ ...t, k });
+  state.whaleList.sort((a, b) => b.time - a.time);
+  state.whaleList.length = Math.min(state.whaleList.length, 9);
+  const max = Math.max(...state.whaleList.map((w) => w.size), 1);
+  $('whales').innerHTML = state.whaleList.map((w) => {
+    const d = 9 + (w.size / max) * 15;
+    return `<li class="whale ${w.side} ${fresh && w.k === k ? 'fresh' : ''}"><u style="width:${d.toFixed(0)}px;height:${d.toFixed(0)}px"></u><b>${w.side.toUpperCase()}</b><span class="mono">${compact(w.size)} ${esc(mk().unit)} · $${compact(w.notional)}</span><time>${clock(w.time)}</time></li>`;
+  }).join('');
+}
+
+function renderWhales() {
+  const w = state.flow?.whales;
+  if (!w) return;
+  state.whaleMin[state.market] = w.threshold;
+  $('whaleMeta').textContent = `≥ ${compact(w.threshold)} ${mk().unit} · top 2%`;
+  const total = w.buyVol + w.sellVol;
+  $('whaleSum').innerHTML = total ? `<div class="labels"><span class="bull">Whale buys ${pct(w.buyVol / total)}</span><span class="bear">Whale sells ${pct(w.sellVol / total)}</span></div><div class="bar2"><i style="width:${((w.buyVol / total) * 100).toFixed(1)}%"></i></div>` : '';
+  const first = state.whaleList.length === 0;
+  for (const t of w.list.slice().reverse()) addWhale(t, !first);
+  if (!state.whaleList.length) $('whales').innerHTML = '<li class="empty">No large trades in the recent tape</li>';
 }
 
 function renderLiq() {
   const el = $('liq');
   const book = state.flow?.book;
   const r = state.result;
-  const price = state.price ?? state.candles[state.candles.length - 1]?.close;
+  const price = state.prices[state.market] ?? state.candles[state.candles.length - 1]?.close;
   let html = '';
   if (book) {
-    $('liqMeta').textContent = `book ±1% · $1 levels`;
-    const asks = book.asks.slice(0, 7).reverse();
-    const bids = book.bids.slice(0, 7);
-    const max = Math.max(...[...asks, ...bids].map((l) => l.size), 1);
+    $('liqMeta').textContent = 'order book';
+    const asks = book.asks.slice(0, 6).reverse();
+    const bids = book.bids.slice(0, 6);
+    const max = Math.max(...[...asks, ...bids].map((l) => l.size), 1e-9);
     const walls = new Set([...book.bidWalls, ...book.askWalls].map((w) => w.price));
-    const rung = (l, side) => `<div class="rung ${side} ${walls.has(l.price) ? 'wall' : ''}"><div class="fill" style="width:${((l.size / max) * 100).toFixed(1)}%"></div><span class="p">${fmt(l.price, 0)}</span><span class="q">${compact(l.size)}</span></div>`;
-    html += `<div class="split"><div class="labels"><span class="bull">Bids ${pct(book.imbalance)}</span><span class="muted small">resting orders near price</span><span class="bear">Asks ${pct(1 - book.imbalance)}</span></div>
-      <div class="bar2"><div class="b" style="width:${(book.imbalance * 100).toFixed(1)}%"></div><div class="s"></div></div></div>
-      <div class="ladder">${asks.map((l) => rung(l, 'ask')).join('')}<div class="mid">${fmt(book.mid)} · spread ${fmt(book.spread)}</div>${bids.map((l) => rung(l, 'bid')).join('')}</div>`;
+    const rung = (l, side) => `<div class="rung ${side} ${walls.has(l.price) ? 'wall' : ''}"><i style="width:${((l.size / max) * 100).toFixed(1)}%"></i><span>${fmt(l.price, 0)}</span><span>${compact(l.size)}</span></div>`;
+    html += `<div><div class="labels"><span class="bull">Bids ${pct(book.imbalance)}</span><span class="bear">Asks ${pct(1 - book.imbalance)}</span></div><div class="bar2"><i style="width:${(book.imbalance * 100).toFixed(1)}%"></i></div></div>
+      <div class="ladder">${asks.map((l) => rung(l, 'ask')).join('')}<div class="mid">${fmt(book.mid)}</div>${bids.map((l) => rung(l, 'bid')).join('')}</div>`;
   }
   if (r && price) {
-    const items = [];
     const above = r.pools.filter((p) => p.kind === 'EQH' && p.price > price).sort((a, b) => a.price - b.price)[0];
     const below = r.pools.filter((p) => p.kind === 'EQL' && p.price < price).sort((a, b) => b.price - a.price)[0];
-    if (above) items.push(['Buy stops above (EQH)', above.price]);
-    if (below) items.push(['Sell stops below (EQL)', below.price]);
-    if (r.prevDay) items.push(['Previous day high', r.prevDay.high], ['Previous day low', r.prevDay.low]);
-    const sw = r.sweeps[r.sweeps.length - 1];
-    html += `<div class="sub-head" style="margin-top:4px">Stop-loss liquidity</div><ul class="pools">${items.map(([k, p]) => `<li><span class="k">${k}</span><span class="mono">${fmt(p)} <span class="${p > price ? 'bull' : 'bear'}">${signed(p - price)}</span></span></li>`).join('')}
-      ${sw ? `<li><span class="k">Last liquidity grab</span><span class="mono">${sw.kind} ${fmt(sw.price)}</span></li>` : ''}</ul>`;
+    const rows = [];
+    if (above) rows.push(['Buy stops above', above.price]);
+    if (below) rows.push(['Sell stops below', below.price]);
+    if (r.prevDay) rows.push(['Previous day high', r.prevDay.high], ['Previous day low', r.prevDay.low]);
+    html += `<div class="stack" style="gap:4px">${rows.map(([k, p]) => `<div class="row"><span>${k}</span><b class="mono">${fmt(p)}</b></div>`).join('')}</div>`;
   }
-  el.innerHTML = html || '<p class="muted small">Loading…</p>';
-}
-
-function renderWhales() {
-  const w = state.flow?.whales;
-  if (!w) return;
-  $('whaleMeta').textContent = `≥ ${compact(w.threshold)} oz`;
-  const total = w.buyVol + w.sellVol;
-  $('whaleSummary').innerHTML = total ? `<div class="split"><div class="labels"><span class="bull">Whale buys ${pct(w.buyVol / total)}</span><span class="bear">Whale sells ${pct(w.sellVol / total)}</span></div>
-    <div class="bar2"><div class="b" style="width:${((w.buyVol / total) * 100).toFixed(1)}%"></div><div class="s"></div></div></div>` : '';
-  const maxSize = Math.max(...w.list.map((t) => t.size), 1);
-  const first = state.seenWhales.size === 0;
-  $('whales').innerHTML = w.list.map((t) => {
-    const k = `${t.time}:${t.price}:${t.size}`;
-    const fresh = !first && !state.seenWhales.has(k);
-    state.seenWhales.add(k);
-    const d = 10 + (t.size / maxSize) * 24;
-    return `<li class="whale ${t.side} ${fresh ? 'fresh' : ''}"><span class="bubble"><i style="width:${d.toFixed(0)}px;height:${d.toFixed(0)}px"></i></span>
-      <span class="sd">${t.side.toUpperCase()}</span><span><span class="sz">${compact(t.size)} oz</span> <span class="px">@ ${fmt(t.price)} · $${compact(t.notional)}</span></span><time>${clock(t.time)}</time></li>`;
-  }).join('') || '<li class="empty">No large trades in the recent tape</li>';
-  if (state.seenWhales.size > 2000) state.seenWhales = new Set([...state.seenWhales].slice(-500));
+  el.innerHTML = html || '<p class="empty">Loading…</p>';
 }
 
 async function loadFlow() {
+  const { market, tf } = state;
   try {
-    state.flow = await feed.flow(state.tf);
+    const f = await feed.flow(market, tf);
+    if (market !== state.market || tf !== state.tf) return;
+    state.flow = f;
   } catch {
     return;
   }
   renderFlow();
-  renderLiq();
   renderWhales();
+  renderLiq();
   drawWalls();
 }
 
-// ---- Auto-trader -----------------------------------------------------------------------
+// ---- News ---------------------------------------------------------------------------
+
+function countdown(t) {
+  const s = Math.round(t - Date.now() / 1000);
+  if (s <= 0) return 'now';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h >= 24 ? `in ${Math.floor(h / 24)}d ${h % 24}h` : h ? `in ${h}h ${m}m` : `in ${m}m ${s % 60}s`;
+}
+
+function renderNews() {
+  const n = state.news;
+  if (!n) return;
+  const nk = `${state.market}:${n.ok}:${n.items.length}:${n.items[0]?.title}:${n.events[0]?.title}:${Math.floor(Date.now() / 30000)}`;
+  if (nk === state.newsKey) return;
+  state.newsKey = nk;
+  $('newsMeta').textContent = n.demo ? 'demo headlines' : n.ok ? 'live · checked every few seconds' : 'connecting to feeds…';
+  $('events').innerHTML = n.events.slice(0, 2).map((e) => `<div class="event"><span><b>${esc(e.title)}</b>${e.forecast ? ` · forecast ${esc(e.forecast)}` : ''}</span><b class="mono" style="color:var(--accent)">${countdown(e.time)}</b></div>`).join('');
+  const items = n.items.filter((i) => i.markets.includes(state.market)).slice(0, 14);
+  const prev = state.seenNews;
+  $('news').innerHTML = items.map((i) => {
+    const bias = i.bias?.[state.market];
+    const fresh = prev && !prev.has(i.title);
+    const title = i.link ? `<a href="${esc(i.link)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title);
+    return `<li class="${fresh ? 'fresh' : ''}"><div class="hd"><em class="${i.impact}">${i.impact === 'high' ? 'HIGH' : i.impact === 'med' ? 'MED' : 'LOW'}</em>${esc(i.source)} · ${ago(i.seenAt)}${bias ? ` · <b class="${bias}">${bias === 'bull' ? 'bullish' : 'bearish'} ${esc(mk().label.toLowerCase())}</b>` : ''}</div>${title}</li>`;
+  }).join('') || '<li class="empty">No headlines for this market yet</li>';
+  if (prev) {
+    for (const i of n.items) {
+      if (!prev.has(i.title) && i.impact === 'high') {
+        toast(`<b>High-impact news:</b> ${esc(i.title)}`);
+        beep(520);
+      }
+    }
+  }
+  state.seenNews = new Set(n.items.map((i) => i.title));
+}
+
+async function loadNews() {
+  try {
+    state.news = await feed.news();
+    renderNews();
+  } catch { /* retried */ }
+}
+
+// ---- Auto-trader ----------------------------------------------------------------------
 
 const form = $('botForm');
-
-function fillForm(p) {
-  if (state.formDirty) return;
-  for (const k of ['startBalance', 'riskPct', 'minGrade', 'maxOpen', 'dailyLossPct']) {
-    if (document.activeElement !== form.elements[k]) form.elements[k].value = p[k];
-  }
-  $('riskOut').textContent = `${form.elements.riskPct.value}%`;
-}
 
 function renderPaper() {
   const p = state.paper;
   if (!p) return;
-  fillForm(p);
+  if (!state.formDirty) {
+    for (const k of ['startBalance', 'riskPct', 'maxOpen', 'dailyLossPct']) if (document.activeElement !== form.elements[k]) form.elements[k].value = p[k];
+    $('riskOut').textContent = `${form.elements.riskPct.value}%`;
+  }
   const st = $('botState');
   st.textContent = p.enabled ? 'RUNNING' : 'STOPPED';
   st.className = `state ${p.enabled ? 'on' : ''}`;
-  const btn = $('botToggle');
-  btn.textContent = p.enabled ? 'Stop auto-trading' : 'Start auto-trading';
-  btn.classList.toggle('running', p.enabled);
-  $('botNote').textContent = `${p.live ? 'LIVE broker' : 'Paper mode'}: ${p.live ? 'real orders.' : 'simulated fills, no real money.'} ${p.trades} closed trades, ${pct(p.winRate)} won. Live broker execution plugs into the same engine later.`;
+  $('botToggle').textContent = p.enabled ? 'Stop' : 'Start';
+  $('kpis').innerHTML = `<div>${p.trades}<span>trades</span></div><div>${p.trades ? pct(p.winRate) : '—'}<span>won</span></div><div>${p.profitFactor != null ? p.profitFactor.toFixed(2) : '—'}<span>profit factor</span></div>`;
   const eq = p.equity.map((e) => e.v);
   const sk = `${eq.length}:${eq[eq.length - 1]}`;
   if (sk !== state.sparkKey) {
     state.sparkKey = sk;
-    $('equitySpark').innerHTML = spark(eq.length > 1 ? eq : [p.startBalance, p.startBalance]);
+    $('equitySpark').innerHTML = spark(eq.length > 1 ? eq : [p.startBalance, p.startBalance], { h: 52 });
   }
   renderPositions();
-  const log = $('botLog');
-  log.innerHTML = p.log.slice(0, 6).map((l) => `<li><time>${clock(l.t)}</time><span>${esc(l.msg)}</span></li>`).join('') || '<li class="empty">Nothing yet</li>';
+  $('botLog').innerHTML = p.log.slice(0, 8).map((l) => `<li><time>${clock(l.t)}</time><span>${esc(l.msg)}</span></li>`).join('') || '<li class="empty">No activity yet. Trades appear here as setups fire.</li>';
+  $('history').innerHTML = p.history.map((h) => `<li><time>${new Date(h.exitTime * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time><span><b class="${h.dir}">${h.dir === 'bull' ? '▲' : '▼'}</b> ${esc(h.label)} ${esc(h.tf)} · ${esc(stratName(h.strategy))} · ${esc(h.reason)}</span><b class="mono ${h.pnl >= 0 ? 'bull' : 'bear'}">${money(h.pnl)} (${signed(h.r, 1)}R)</b></li>`).join('') || '<li class="empty">No closed trades yet</li>';
   if (state.seenLog != null) {
     for (const l of p.log) {
       if (l.t <= state.seenLog) break;
@@ -685,35 +668,26 @@ function renderPaper() {
 function renderPositions() {
   const p = state.paper;
   if (!p) return;
-  const price = state.price;
   let unreal = 0;
   $('positions').innerHTML = p.positions.map((x) => {
+    const price = state.prices[x.market];
     const pl = Number.isFinite(price) ? (x.dir === 'bull' ? 1 : -1) * (price - x.entry) * x.units : 0;
     unreal += pl;
-    return `<li class="pos"><span class="side ${x.dir}">${x.dir === 'bull' ? '▲ LONG' : '▼ SHORT'}</span><span>${esc(stratName(x.strategy))} <span class="grade ${x.grade}" style="min-width:18px;height:18px;font-size:10px;border-radius:5px">${x.grade}</span></span>
-      <span class="pl ${pl >= 0 ? 'bull' : 'bear'}">${money(pl)}</span>
-      <span class="det">${x.units.toFixed(2)} oz (${x.lots.toFixed(2)} lots) @ ${fmt(x.entry)} · SL ${fmt(x.stop)} · TP ${fmt(x.target)}</span></li>`;
+    return `<li class="pos"><span><b class="${x.dir}">${x.dir === 'bull' ? '▲ LONG' : '▼ SHORT'}</b> ${esc(x.label)} ${esc(x.tf)}</span><b class="mono ${pl >= 0 ? 'bull' : 'bear'}">${money(pl)}</b><span class="det">${+x.units.toFixed(4)} @ ${fmt(x.entry)} · SL ${fmt(x.stop)} · TP ${fmt(x.target)}</span></li>`;
   }).join('') || '<li class="empty">No open trades</li>';
   const equity = p.balance + unreal;
-  tween($('equity'), equity, (v) => money(v));
+  tween($('equity'), equity, (v) => money(v), 500);
   const pnl = equity - p.startBalance;
-  const pnlEl = $('pnl');
-  pnlEl.textContent = `${pnl >= 0 ? '+' : '−'}$${fmt(Math.abs(pnl))}`;
-  pnlEl.className = `pnl ${pnl >= 0 ? 'bull' : 'bear'}`;
-  $('pnlPct').textContent = `${signed((equity / p.startBalance - 1) * 100)}% since start`;
+  $('pnl').textContent = `${pnl >= 0 ? '+' : '−'}$${fmt(Math.abs(pnl))}`;
+  $('pnl').className = `mono pnl ${pnl >= 0 ? 'bull' : 'bear'}`;
+  $('pnlPct').textContent = `${signed((equity / p.startBalance - 1) * 100)}% · today ${money(p.dayPnl)}`;
 }
 
 async function loadPaper() {
   try {
     state.paper = await feed.paper();
     renderPaper();
-    renderAccuracy();
   } catch { /* retried */ }
-}
-
-function formConfig() {
-  const v = (k) => form.elements[k].value;
-  return { startBalance: +v('startBalance'), riskPct: +v('riskPct'), minGrade: v('minGrade'), maxOpen: +v('maxOpen'), dailyLossPct: +v('dailyLossPct') };
 }
 
 async function paperAction(body, btn) {
@@ -722,46 +696,39 @@ async function paperAction(body, btn) {
     state.paper = await feed.paperAction(body, state.token);
     state.formDirty = false;
     renderPaper();
-    renderAccuracy();
   } catch (e) {
     if (e.status === 401) {
-      const tok = window.prompt('This auto-trader is protected. Enter the ADMIN_TOKEN set on the server:');
+      const tok = window.prompt('The auto-trader controls are protected. Enter the ADMIN_TOKEN set on the server:');
       if (tok) {
         state.token = tok;
         store.set('token', tok);
+        if (btn) btn.disabled = false;
         return paperAction(body, btn);
       }
-    }
-    toast(`<b>Auto-trader:</b> ${esc(e.message)}`);
+    } else toast(`<b>Auto-trader:</b> ${esc(e.message)}`);
   } finally {
     if (btn) btn.disabled = false;
   }
   return undefined;
 }
-
+const formConfig = () => ({ startBalance: +form.elements.startBalance.value, riskPct: +form.elements.riskPct.value, maxOpen: +form.elements.maxOpen.value, dailyLossPct: +form.elements.dailyLossPct.value });
 form.addEventListener('input', (e) => {
   state.formDirty = true;
   if (e.target.name === 'riskPct') $('riskOut').textContent = `${e.target.value}%`;
 });
-form.addEventListener('change', () => {
-  if (state.paper && !state.paper.enabled) return; // applied on Start
-  paperAction({ config: formConfig() });
-});
+form.addEventListener('change', () => paperAction({ config: formConfig() }));
 $('botToggle').addEventListener('click', (e) => {
-  const on = state.paper?.enabled;
-  if (!on && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
-  paperAction(on ? { action: 'stop' } : { config: formConfig(), action: 'start' }, e.currentTarget);
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  paperAction(state.paper?.enabled ? { action: 'stop' } : { config: formConfig(), action: 'start' }, e.currentTarget);
 });
 $('botReset').addEventListener('click', (e) => {
-  if (!window.confirm('Reset the paper account? Its history will be cleared.')) return;
-  paperAction({ action: 'reset', amount: +form.elements.startBalance.value }, e.currentTarget);
+  if (window.confirm('Reset the paper account? Its history will be cleared.')) paperAction({ action: 'reset', amount: +form.elements.startBalance.value }, e.currentTarget);
 });
 $('botClose').addEventListener('click', (e) => {
-  if (!window.confirm('Stop the auto-trader and close every open trade at the current price?')) return;
-  paperAction({ action: 'stop', closeAll: true }, e.currentTarget);
+  if (window.confirm('Stop the auto-trader and close every open trade at the current price?')) paperAction({ action: 'stop', closeAll: true }, e.currentTarget);
 });
 
-// ---- Alerts --------------------------------------------------------------------------
+// ---- Alerts ---------------------------------------------------------------------------
 
 function toast(html) {
   const t = document.createElement('div');
@@ -771,18 +738,17 @@ function toast(html) {
   setTimeout(() => {
     t.classList.add('out');
     setTimeout(() => t.remove(), 400);
-  }, 6000);
+  }, 7000);
   while ($('toasts').children.length > 4) $('toasts').lastChild.remove();
 }
 
-function beep() {
+function beep(freq = 700) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
-    o.type = 'sine';
-    o.frequency.setValueAtTime(660, ctx.currentTime);
-    o.frequency.exponentialRampToValueAtTime(990, ctx.currentTime + 0.15);
+    o.frequency.setValueAtTime(freq, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(freq * 1.5, ctx.currentTime + 0.15);
     g.gain.setValueAtTime(0.07, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
     o.connect(g).connect(ctx.destination);
@@ -792,53 +758,55 @@ function beep() {
   } catch { /* browsers block audio until the user interacts */ }
 }
 
-function showBanner(msg) {
-  const b = $('banner');
-  b.textContent = msg;
-  b.hidden = false;
-}
-function hideBanner() {
-  $('banner').hidden = true;
-}
-
-// ---- Boot -------------------------------------------------------------------------------
+// ---- Boot -----------------------------------------------------------------------------
 
 async function boot() {
-  renderToolbar();
-  renderSessions();
-  setInterval(renderSessions, 30000);
   try {
-    const cfg = await feed.config();
-    state.cfg = cfg;
-    const src = $('srcPrice');
-    src.textContent = cfg.demo ? 'DEMO PRICES' : `Prices · ${cfg.label}`;
-    src.title = cfg.note;
-    if (cfg.demo) src.classList.add('demo');
-    $('srcFlow').textContent = cfg.flow ? `Order flow · ${cfg.flow}` : 'Order flow off';
-    if (state.view === 'tv') setView('tv');
+    state.cfg = await feed.config();
   } catch (e) {
-    showBanner(`Server not reachable: ${e.message}`);
+    $('banner').textContent = `Server not reachable: ${e.message}`;
+    $('banner').hidden = false;
+  }
+  if (!state.cfg.markets.some((m) => m.id === state.market)) state.market = state.cfg.markets[0]?.id || 'gold';
+  renderHeader();
+  renderPills();
+  if (state.view === 'tv') {
+    $('tv').hidden = false;
+    showTradingView();
   }
   load();
   loadDayOpen();
-  loadBot();
+  loadBots();
   loadFlow();
-  loadCot();
+  loadNews();
   loadPaper();
-  connect();
-  setInterval(loadDayOpen, 5 * 60000);
-  setInterval(() => load({ soft: true }), 60000);
-  setInterval(loadBot, 60000);
-  setInterval(loadFlow, 5000);
-  setInterval(loadCot, 30 * 60000);
-  setInterval(loadPaper, 3000);
+  const dot = $('liveDot');
+  feed.subscribe((d) => {
+    if (d.error) return;
+    dot.className = 'live-dot on';
+    dot.title = 'Live';
+    if (!state.streamOn || d.m !== state.market) onPrice(d.m, d.p, d.t);
+  }, () => {
+    dot.className = 'live-dot err';
+    dot.title = 'Reconnecting…';
+  });
+  feed.trades(Object.fromEntries(state.cfg.markets.map((m) => [m.id, m.stream])), onTrade, (on) => {
+    state.streamOn = on;
+    renderPills();
+  });
   setInterval(() => {
-    if (state.bot) {
-      const m = $('heroMeta'); // refresh "found x min ago" without re-animating the card
-      const best = candidates().list[0];
-      if (best) m.textContent = `found ${ago(best.signalTime + 900)}`;
-    }
-  }, 60000);
+    if (tapeDirty || !state.streamOn) renderTapeSplit();
+    tapeDirty = false;
+    renderPositions();
+  }, 500);
+  setInterval(loadBots, 5000);
+  setInterval(loadFlow, 3000);
+  setInterval(loadNews, 2000);
+  setInterval(loadPaper, 3000);
+  setInterval(() => load({ soft: true }), 30000);
+  setInterval(loadDayOpen, 5 * 60000);
+  setInterval(renderPills, 30000);
+  setInterval(() => { if (state.news) $('events').querySelectorAll('.event b.mono').forEach((el, i) => { el.textContent = countdown(state.news.events[i].time); }); }, 1000);
 }
 
 boot();

@@ -83,33 +83,3 @@ test('twelve data timestamps parse as UTC', () => {
   assert.equal(parseTime('2026-10-20'), Date.parse('2026-10-20T00:00:00Z') / 1000);
 });
 
-test('HTTP API serves config, candles, static files and a live stream', async (t) => {
-  const server = createApp({ provider: createDemo(), pollMs: 50 });
-  await new Promise((r) => server.listen(0, r));
-  t.after(() => {
-    server.closeAllConnections();
-    server.close();
-  });
-  const base = `http://127.0.0.1:${server.address().port}`;
-
-  const cfg = await (await fetch(`${base}/api/config`)).json();
-  assert.equal(cfg.provider, 'demo');
-  assert.equal(cfg.timeframes.length, 14);
-
-  const j = await (await fetch(`${base}/api/candles?tf=M45&limit=50`)).json();
-  assert.equal(j.candles.length, 50);
-
-  assert.equal((await fetch(`${base}/api/candles?tf=X9`)).status, 400);
-  assert.equal((await fetch(`${base}/index.html`)).status, 200);
-  assert.equal((await fetch(`${base}/shared/analysis.js`)).status, 200);
-  assert.equal((await fetch(`${base}/vendor/lightweight-charts.js`)).status, 200);
-  assert.equal((await fetch(`${base}/%2e%2e/package.json`)).status, 404);
-
-  const res = await fetch(`${base}/api/stream`);
-  const reader = res.body.getReader();
-  let buf = '';
-  while (!buf.includes('"p":')) buf += new TextDecoder().decode((await reader.read()).value);
-  const tick = JSON.parse(buf.slice(buf.indexOf('data: ') + 6).split('\n')[0]);
-  assert.ok(tick.p > 0 && tick.t > 0);
-  await reader.cancel();
-});

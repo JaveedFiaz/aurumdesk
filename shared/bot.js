@@ -3,7 +3,7 @@
 // Runs on the server, in the CLI (npm run backtest) and in the hosted preview.
 
 import { getCandles } from './candles.js';
-import { DEFAULT_RULES, STRATEGIES, buildContext, buildHtf, inSession, scanBar, tradeAreas } from './strategies.js';
+import { DEFAULT_RULES, STRATEGIES, STRATEGY_BY_ID, buildContext, buildHtf, inSession, scanBar, tradeAreas } from './strategies.js';
 import { GRADES, scoreSetup } from './confluence.js';
 import { cotAt } from './cot.js';
 
@@ -41,7 +41,7 @@ export function manage(t, bar, rules) {
 
 // c: closed 15m candles, h: closed 1H candles (both ascending).
 // cot: weekly COT metrics (optional); each setup sees only reports already published.
-export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATEGIES.map((s) => s.id), cot = null } = {}) {
+export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATEGIES.map((s) => s.id), cot = null, tfSec = BOT_TF.sec, htfSec = BOT_HTF.sec } = {}) {
   const trades = [];
   const live = new Map(); // strategy -> pending or open trade
   const perDay = new Map();
@@ -76,8 +76,8 @@ export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATE
     if (rules.sessionOnly && !inSession(bar.time)) continue;
 
     // 1H candles that had fully closed when this 15m bar closed.
-    const closeAt = bar.time + BOT_TF.sec;
-    while (hIdx < h.length && h[hIdx].time + BOT_HTF.sec <= closeAt) hIdx++;
+    const closeAt = bar.time + tfSec;
+    while (hIdx < h.length && h[hIdx].time + htfSec <= closeAt) hIdx++;
     if (hIdx !== htfKey) {
       htfKey = hIdx;
       htf = buildHtf(h.slice(Math.max(0, hIdx - HTF_WINDOW), hIdx));
@@ -152,7 +152,7 @@ export function summarize(trades, strategyId, splitTime) {
 
 // Full history is downloaded once; later runs fetch only the latest candles
 // and append them, so a 2-year backtest every 15 minutes stays cheap.
-async function loadHistory(provider, tfId, n, cache) {
+export async function loadHistory(provider, tfId, n, cache) {
   const prev = cache?.[tfId];
   if (prev && prev.length >= n * 0.9) {
     const fresh = await getCandles(provider, tfId, 500);
@@ -172,55 +172,73 @@ function dropForming(candles, sec, now) {
   return last && last.time + sec > now ? candles.slice(0, -1) : candles;
 }
 
-// Fetches history, backtests, ranks, and returns live setups from approved strategies.
-export async function runBot({ provider, now = Date.now() / 1000, history = 70000, rules = DEFAULT_RULES, cot = null, full = false, cache = null, include = STRATEGIES } = {}) {
-  const [c15, c60] = await Promise.all([
-    loadHistory(provider, BOT_TF.id, history, cache),
-    loadHistory(provider, BOT_HTF.id, Math.ceil(history / 4) + HTF_WINDOW, cache),
-  ]);
-  const c = dropForming(c15, BOT_TF.sec, now);
-  const h = dropForming(c60, BOT_HTF.sec, now);
-  if (c.length < WARMUP + 50) throw new Error('Not enough 15m history for the trade finder');
-
-  const trades = backtest(c, h, { rules, cot, strategies: include.map((x) => x.id) });
-  const from = c[Math.min(WARMUP, c.length - 1)].time;
-  const to = c[c.length - 1].time + BOT_TF.sec;
+// Pure analysis of one market + timeframe ("play"). c and h are closed candles.
+// With `prior` (an earlier full result) only the recent tail is scanned for
+// live setups and the statistics are carried over, which is cheap enough to
+// run on every closed candle. Without it the whole history is backtested.
+export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES, rules = DEFAULT_RULES, cot = null, now = Date.now() / 1000, prior = null, full = false, label = '' } = {}) {
+  if (c.length < WARMUP + 50) throw new Error(`Not enough ${tf.id} history`);
+  const ids = include.map((x) => x.id);
+  rules = { ...rules, rrBy: { ...Object.fromEntries(include.filter((x) => x.rr).map((x) => [x.id, x.rr])), ...rules.rrBy } };
+  const opts = { rules, cot, strategies: ids, tfSec: tf.sec, htfSec: htf.sec };
+  const tail = 900;
+  const trades = prior ? backtest(c.slice(-tail), h.slice(-(HTF_WINDOW + Math.ceil((tail * tf.sec) / htf.sec) + 5)), opts) : backtest(c, h, opts);
+  const from = prior ? prior.from : c[Math.min(WARMUP, c.length - 1)].time;
+  const to = c[c.length - 1].time + tf.sec;
   const splitTime = to - (to - from) * APPROVAL.oosShare;
-  const stats = include.map((s) => ({ ...summarize(trades, s.id, splitTime), name: s.name, desc: s.desc }))
+  const stats = prior ? prior.stats : include.map((s) => ({ ...summarize(trades, s.id, splitTime), name: STRATEGY_BY_ID[s.id]?.name || s.id, desc: STRATEGY_BY_ID[s.id]?.desc || '', rr: rules.rrBy[s.id] ?? rules.rr }))
     .sort((a, b) => (b.active - a.active) || (b.expR - a.expR));
   const active = new Set(stats.filter((s) => s.active).map((s) => s.id));
-  const grades = gradeStats(trades);
+  const grades = prior ? prior.grades : gradeStats(trades);
   const byGrade = Object.fromEntries(grades.map((g) => [g.grade, g]));
   const strip = ({ plannedRisk, bars, ...t }) => ({
     ...t,
+    tf: tf.id,
     active: active.has(t.strategy),
-    // What this grade actually did in the backtest.
     expected: byGrade[t.grade] ? { winRate: byGrade[t.grade].winRate, expR: byGrade[t.grade].expR, trades: byGrade[t.grade].trades } : null,
   });
-
+  let recent = trades.filter((t) => t.status === 'closed').map(strip);
+  if (prior) {
+    const seen = new Set(prior.recent.map((t) => `${t.strategy}:${t.signalTime}`));
+    const cutoff = prior.recent.length ? prior.recent[prior.recent.length - 1].signalTime : 0;
+    recent = prior.recent.concat(recent.filter((t) => t.signalTime > cutoff && !seen.has(`${t.strategy}:${t.signalTime}`)));
+  }
   return {
-    provider: provider.label,
-    demo: !!provider.demo,
-    tf: BOT_TF.id,
-    htf: BOT_HTF.id,
+    provider: label,
+    tf: tf.id,
+    htf: htf.id,
     from,
     to,
     days: Math.round((to - from) / 86400),
     rules,
     approval: APPROVAL,
     generatedAt: Math.floor(now),
+    testedAt: prior ? prior.testedAt : Math.floor(now),
     stats,
     grades,
     orderFlow: c.some((x) => x.buyVolume != null),
     cot: !!cot,
-    // Where the live strategies would act next (drawn as buy/sell areas on the chart).
-    ...tradeAreas(buildContext(c.slice(-WINDOW), buildHtf(h.slice(-HTF_WINDOW))), rules),
+    // Where the strategies would act next (drawn as buy/sell areas on the chart).
+    ...tradeAreas(buildContext(c.slice(-WINDOW), buildHtf(h.slice(-HTF_WINDOW))), rules, ids),
     // Setups waiting for the next bar's open, and trades still running.
     signals: trades.filter((t) => t.status !== 'closed' && active.has(t.strategy)).map(strip),
-    // The same, from strategies that have not proven an edge: shown, never traded.
+    // The same from strategies that have not proven an edge: shown, never traded.
     watch: trades.filter((t) => t.status !== 'closed' && !active.has(t.strategy)).map(strip),
-    recent: trades.filter((t) => t.status === 'closed').slice(-120).map(strip),
-    // Every closed trade, for the CLI report (npm run backtest).
+    recent: recent.slice(-120),
     ...(full ? { closed: trades.filter((t) => t.status === 'closed').map(strip) } : {}),
   };
+}
+
+export function dropFormingCandle(candles, sec, now) {
+  return dropForming(candles, sec, now);
+}
+
+// Fetches history for a 15m/1H play and analyses it (used by the CLI and tests).
+export async function runBot({ provider, now = Date.now() / 1000, history = 70000, rules = DEFAULT_RULES, cot = null, full = false, cache = null, include = STRATEGIES, tf = BOT_TF, htf = BOT_HTF } = {}) {
+  const [c0, h0] = await Promise.all([
+    loadHistory(provider, tf.id, history, cache),
+    loadHistory(provider, htf.id, Math.ceil((history * tf.sec) / htf.sec) + HTF_WINDOW, cache),
+  ]);
+  const r = analyze(dropForming(c0, tf.sec, now), dropForming(h0, htf.sec, now), { tf, htf, include, rules, cot, now, full, label: provider.label });
+  return { ...r, demo: !!provider.demo };
 }

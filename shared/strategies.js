@@ -28,6 +28,10 @@ export const STRATEGIES = [
 // Tested on the same data and rejected: they lost money, or only made money in
 // one half of the period. Kept so they can be re-tested (npm run backtest -- --all).
 export const RETIRED = [
+  { id: 'trap_flow', name: 'Trap + order flow', desc: 'A breakout (or breakdown) through a fresh swing that fails within 5 candles and closes back inside on above-average volume, with cumulative delta already pointing the other way.' },
+  { id: 'trap_trend', name: 'Trap with trend', desc: 'A failed breakout or breakdown that closes back inside the level in the direction of the higher-timeframe trend.' },
+  { id: 'zone_sweep', name: 'Sweep into zone', desc: 'Liquidity is swept, then price makes its first touch of a fresh order block or supply/demand zone in the trend direction and rejects it.' },
+  { id: 'trap', name: 'Trap (unfiltered)', desc: 'Any failed breakout or breakdown.' },
   { id: 'vwap_pullback', name: 'VWAP pullback', desc: 'Trend pullback to the daily VWAP.' },
   { id: 'sweep_choch', name: 'Sweep + CHoCH', desc: 'Liquidity grab followed by a change of character.' },
   { id: 'sr_flip', name: 'S/R flip', desc: 'Broken support/resistance retested from the other side with order-flow confirmation.' },
@@ -101,7 +105,49 @@ const flowAgrees = (bar, dir, min = 0) => {
   return d == null || (dir === 'bull' ? d > min : d < -min);
 };
 
+// Was liquidity on the opposite side taken in the last 20 bars and reclaimed?
+export function swept(ctx, dir) {
+  const { w, swings } = ctx;
+  const L = w.length - 1;
+  const bull = dir === 'bull';
+  for (const s of swings) {
+    if (s.type !== (bull ? 'L' : 'H') || s.confirmedAt > L || s.i < L - 80) continue;
+    for (let k = Math.max(s.confirmedAt, L - 20); k <= L; k++) {
+      if (bull ? w[k].low < s.price && w[k].close > s.price : w[k].high > s.price && w[k].close < s.price) return true;
+    }
+  }
+  return false;
+}
+
+// Sign of cumulative delta over the last 8 candles (null without order-flow data).
+export function cvdSign(w, L) {
+  if (w[L].buyVolume == null || L < 8) return null;
+  let cvd = 0;
+  for (let k = L - 7; k <= L; k++) cvd += 2 * (w[k].buyVolume ?? w[k].volume / 2) - (w[k].volume || 0);
+  return Math.sign(cvd);
+}
+
 export const CHECKS = {
+  // Trap confirmed by order flow: cumulative delta already points the trade's way.
+  trap_flow(ctx) {
+    const s = CHECKS.trap(ctx);
+    if (!s) return null;
+    const cv = cvdSign(ctx.w, ctx.w.length - 1);
+    return cv != null && cv === (s.dir === 'bull' ? 1 : -1) ? { ...s, why: `${s.why} · order flow agrees` } : null;
+  },
+
+  // Trap in the direction of the higher-timeframe trend.
+  trap_trend(ctx) {
+    const s = CHECKS.trap(ctx);
+    return s && ctx.htf && ctx.htf.trend === s.dir ? { ...s, why: `${s.why} · with the higher-timeframe trend` } : null;
+  },
+
+  // Zone retest that comes right after a liquidity sweep.
+  zone_sweep(ctx) {
+    const s = CHECKS.zone_retest(ctx);
+    return s && swept(ctx, s.dir) ? { ...s, why: `${s.why} after a liquidity sweep` } : null;
+  },
+
   zone_retest(ctx) {
     const { w, a, ms, zones, htf } = ctx;
     const L = w.length - 1;
@@ -253,7 +299,7 @@ export const CHECKS = {
     if (Math.abs(bar.close - bar.open) < 0.6 * range) return null;
     const dir = bar.close > bar.open ? 'bull' : 'bear';
     const bull = dir === 'bull';
-    if (!inKillzone(bar.time)) return null;
+    if (!ctx.anyHour && !inKillzone(bar.time)) return null;
     if (!htf || htf.trend !== dir || !flowAgrees(bar, dir, 0.15)) return null;
     const lv = swings.filter((s) => s.type === (bull ? 'H' : 'L') && s.confirmedAt <= L - 1 && s.i >= L - 150)
       .find((s) => {
@@ -264,6 +310,40 @@ export const CHECKS = {
     if (!lv) return null;
     const stop = bull ? Math.max(bar.low, lv.price - A) - 0.1 * A : Math.min(bar.high, lv.price + A) + 0.1 * A;
     return plan(dir, bar, stop, { why: `Broke ${bull ? 'swing high' : 'swing low'} ${lv.price.toFixed(2)} on ${(bar.volume / vAvg).toFixed(1)}× volume` });
+  },
+
+  // Trap (failed breakout / breakdown): price closes through a fresh swing
+  // high (low), traps the breakout traders, then within a few bars closes
+  // back inside the level with volume and order flow on the other side.
+  trap(ctx) {
+    const { w, a, swings } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    const vAvg = avgVolume(w, L);
+    for (const dir of ['bear', 'bull']) {
+      const bull = dir === 'bull'; // bull = failed breakdown, we buy
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.05) || !(bar.volume >= 1.2 * vAvg)) continue;
+      for (const s of swings) {
+        if (s.type !== (bull ? 'L' : 'H') || s.confirmedAt > L - 2 || s.i < L - 120) continue;
+        const p = s.price;
+        if (bull ? !(bar.close > p && w[L - 1].close <= p) : !(bar.close < p && w[L - 1].close >= p)) continue;
+        // The breakout: first close beyond the level, at most 5 bars ago, untouched before that.
+        let brk = -1;
+        let clean = true;
+        for (let k = s.i + 1; k < L && clean; k++) {
+          const beyond = bull ? w[k].close < p : w[k].close > p;
+          if (beyond && brk < 0) brk = k;
+          if (brk < 0 && (bull ? w[k].low < p - 0.1 * A : w[k].high > p + 0.1 * A)) clean = false;
+        }
+        if (!clean || brk < 0 || L - brk > 5) continue;
+        let ext = bar;
+        for (let k = brk; k <= L; k++) if (bull ? w[k].low < ext.low : w[k].high > ext.high) ext = w[k];
+        const stop = bull ? ext.low - 0.2 * A : ext.high + 0.2 * A;
+        return plan(dir, bar, stop, { why: `Trap ${bull ? 'breakdown below' : 'breakout above'} ${p.toFixed(2)}: failed after ${L - brk} bar${L - brk > 1 ? 's' : ''}`, level: p, trap: true });
+      }
+    }
+    return null;
   },
 
   htf_zone(ctx) {
@@ -310,7 +390,7 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
     const risk = Math.abs(s.entry - s.stop);
     if (!(risk >= rules.minStopAtr * a[L] && risk <= rules.maxStopAtr * a[L] && risk >= 3 * rules.cost)) continue;
     const sign = s.dir === 'bull' ? 1 : -1;
-    const rr = STRATEGY_BY_ID[id]?.rr ?? rules.rr;
+    const rr = rules.rrBy?.[id] ?? STRATEGY_BY_ID[id]?.rr ?? rules.rr;
     out.push({ ...s, strategy: id, time: bar.time, rr, target: s.entry + sign * rr * risk });
   }
   return out;
@@ -320,7 +400,7 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
 // on the chart. Zone retest fires on the first touch of a fresh zone in the
 // trend direction; volume breakout fires on a high-volume close through the
 // nearest fresh swing in the 1H trend direction.
-export function tradeAreas(ctx, rules = DEFAULT_RULES) {
+export function tradeAreas(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => x.id)) {
   const { w, a, ms, zones, swings, htf } = ctx;
   const L = w.length - 1;
   if (L < 30) return { areas: [], triggers: [] };
@@ -329,9 +409,10 @@ export function tradeAreas(ctx, rules = DEFAULT_RULES) {
   const areas = [];
   const triggers = [];
   const dir = ms.trend;
-  if (dir && htf && htf.trend === dir) {
+  const zoneId = ids.find((x) => x === 'zone_retest' || x === 'zone_sweep');
+  if (zoneId && dir && htf && htf.trend === dir) {
     const bull = dir === 'bull';
-    const rr = STRATEGY_BY_ID.zone_retest.rr ?? rules.rr;
+    const rr = rules.rrBy?.[zoneId] ?? STRATEGY_BY_ID[zoneId].rr ?? rules.rr;
     [...ms.orderBlocks, ...zones.filter((z) => z.score >= 50)]
       .filter((z) => z.side === dir && !z.broken && z.touches === 0 && (bull ? z.top < price : z.bottom > price))
       .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))
@@ -342,13 +423,13 @@ export function tradeAreas(ctx, rules = DEFAULT_RULES) {
         const risk = Math.abs(entry - stop);
         if (!(risk <= rules.maxStopAtr * A)) return;
         areas.push({
-          dir, strategy: 'zone_retest', top: z.top, bottom: z.bottom, time: z.time,
+          dir, strategy: zoneId, top: z.top, bottom: z.bottom, time: z.time,
           kind: z.kind === 'bullOB' || z.kind === 'bearOB' ? 'Order block' : bull ? 'Demand' : 'Supply',
           entry, stop, target: entry + (bull ? 1 : -1) * rr * risk,
         });
       });
   }
-  if (htf && htf.trend) {
+  if (ids.includes('vol_breakout') && htf && htf.trend) {
     const bull = htf.trend === 'bull';
     const lv = swings
       .filter((s) => s.type === (bull ? 'H' : 'L') && s.confirmedAt <= L && s.i >= L - 150 && (bull ? s.price > price : s.price < price))
