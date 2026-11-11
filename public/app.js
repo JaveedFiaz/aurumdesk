@@ -887,7 +887,7 @@ function renderScore() {
   $('score').innerHTML = Object.entries(b.tfs).map(([tf, t]) => {
     if (t.pending) return `<div class="sc"><div class="t">${TF[tf].label} · ${t.strategies.map(stratName).join(', ')}<span class="st off">${t.error ? 'ERROR' : 'TESTING'}</span></div><div class="n">${t.error ? esc(t.error) : 'Backtesting on real history…'}</div></div>`;
     return t.stats.map((s) => `<div class="sc" title="${esc(s.desc)}"><div class="t">${TF[tf].label} · ${esc(s.name)}<span class="st ${s.active ? 'on' : 'off'}">${s.active ? 'TRADING' : 'WATCH ONLY'}</span></div>
-      ${s.gate ? `<div class="n">Quality filter: only setups with ${Math.round(s.gate * 8)}/8+ confluence${s.all ? ` · without it: ${s.all.trades} trades, PF ${Number.isFinite(s.all.pf) ? s.all.pf.toFixed(2) : '∞'}` : ''}</div>` : ''}
+      ${s.gate != null ? `<div class="n">${s.gate ? `Quality filter: only setups with ${Math.round(s.gate * 8)}/8+ confluence` : 'No confluence filter (the filtered versions did worse)'}${s.all ? ` · without it: ${s.all.trades} trades, PF ${Number.isFinite(s.all.pf) ? s.all.pf.toFixed(2) : '∞'}` : ''}</div>` : ''}
       <div class="n">${s.trades} trades in ${t.days} days · ${pct(s.winRate)} won · PF ${Number.isFinite(s.pf) ? s.pf.toFixed(2) : '∞'} · target ${s.rr}R</div>
       <div class="n">Average <span class="${s.expR >= 0 ? 'bull' : 'bear'}">${signed(s.expR)}R</span> · total <span class="${s.totalR >= 0 ? 'bull' : 'bear'}">${signed(s.totalR, 1)}R</span> · worst drop ${fmt(s.maxDD, 1)}R · recent 40% <span class="${s.outSample.expR >= 0 ? 'bull' : 'bear'}">${signed(s.outSample.expR)}R</span></div></div>`).join('');
   }).join('');

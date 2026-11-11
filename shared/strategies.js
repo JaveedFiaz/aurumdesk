@@ -38,6 +38,12 @@ export const RETIRED = [
   { id: 'liq_absorb', name: 'Liquidity absorption', desc: 'Stops run on heavy volume and absorbed by the other side.' },
   { id: 'pdhl_reject', name: 'PDH/PDL reject', desc: 'First wick of the day through the previous day high or low.' },
   { id: 'htf_zone', name: '1H zone reject', desc: 'First touch of an untested 1H supply/demand zone.' },
+  { id: 'ema_pullback', name: 'EMA trend pullback', desc: 'EMA 20 above EMA 50 (below for shorts): price dips to the EMA 20 and closes back on the trend side with buyers (sellers) in control.' },
+  { id: 'bos_retest', name: 'Break & retest', desc: 'Structure breaks in the higher-timeframe trend direction, price comes back to the broken level once and rejects it with order flow.' },
+  { id: 'asia_sweep', name: 'Session sweep', desc: 'At the London or New York open, price runs the previous session\'s high or low and closes back inside.' },
+  { id: 'surge_go', name: 'Volume surge go', desc: 'A 2.5× volume candle with a full body and order flow behind it, in the higher-timeframe trend, closing at a 10-candle extreme.' },
+  { id: 'vwap_reclaim', name: 'VWAP reclaim', desc: 'In the higher-timeframe trend, price reclaims the daily VWAP after at least three candles on the wrong side, on above-average volume.' },
+  { id: 'inside_break', name: 'Inside-bar breakout', desc: 'An inside candle breaks out in the higher-timeframe trend direction on above-average volume.' },
 ];
 
 export const STRATEGY_BY_ID = Object.fromEntries([...STRATEGIES, ...RETIRED].map((s) => [s.id, s]));
@@ -240,6 +246,129 @@ export const CHECKS = {
       return plan(dir, bar, stop, { why: `Snapped back inside the VWAP 2σ band (VWAP ${band.mean.toFixed(2)})` });
     }
     return null;
+  },
+
+  // Break and retest: the most recent structure break in the 1H trend
+  // direction, then the first return to the broken level, rejected with flow.
+  bos_retest(ctx) {
+    const { w, a, ms, htf } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    if (!htf || !htf.trend) return null;
+    const e = [...ms.events].reverse().find((x) => x.index >= L - 30 && x.index <= L - 3);
+    if (!e || e.dir !== htf.trend) return null;
+    const bull = e.dir === 'bull';
+    if (!rejects(bar, e.dir) || !flowAgrees(bar, e.dir, 0.05)) return null;
+    // First touch of the level since the break.
+    for (let k = e.index + 1; k < L; k++) if (bull ? w[k].low <= e.level + 0.15 * A : w[k].high >= e.level - 0.15 * A) return null;
+    const touched = bull ? bar.low <= e.level + 0.15 * A && bar.close > e.level : bar.high >= e.level - 0.15 * A && bar.close < e.level;
+    if (!touched) return null;
+    const stop = bull ? Math.min(bar.low, e.level) - 0.3 * A : Math.max(bar.high, e.level) + 0.3 * A;
+    return plan(e.dir, bar, stop, { why: `Retest of the broken ${bull ? 'high' : 'low'} ${e.level.toFixed(2)} held`, level: e.level });
+  },
+
+  // Session sweep: at the London open (07-10 UTC) the Asian range (00-07 UTC),
+  // at the New York open (13-16 UTC) the London range (07-13 UTC), gets run and
+  // price closes back inside: the stops are taken, fade the move.
+  asia_sweep(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    const day = Math.floor(bar.time / DAY) * DAY;
+    const min = (bar.time - day) / 60;
+    let from;
+    let to;
+    if (min >= 420 && min < 600) [from, to] = [day, day + 420 * 60];
+    else if (min >= 780 && min < 960) [from, to] = [day + 420 * 60, day + 780 * 60];
+    else return null;
+    let hi = -Infinity;
+    let lo = Infinity;
+    let k = L;
+    while (k > 0 && w[k].time >= to) k--;
+    for (; k >= 0 && w[k].time >= from; k--) {
+      hi = Math.max(hi, w[k].high);
+      lo = Math.min(lo, w[k].low);
+    }
+    if (!Number.isFinite(hi)) return null;
+    // Look back over this session's candles for the sweep, at most 6 bars ago.
+    for (const dir of ['bull', 'bear']) {
+      const bull = dir === 'bull';
+      const lvl = bull ? lo : hi;
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.05)) continue;
+      if (bull ? !(bar.close > lvl) : !(bar.close < lvl)) continue;
+      let ext = null;
+      for (let j = L; j >= Math.max(0, L - 6) && w[j].time >= to; j--) if (bull ? w[j].low < lvl : w[j].high > lvl) ext = ext == null ? (bull ? w[j].low : w[j].high) : bull ? Math.min(ext, w[j].low) : Math.max(ext, w[j].high);
+      if (ext == null) continue;
+      // Only the first reclaim: the previous candle must have closed outside.
+      if (bull ? w[L - 1].close > lvl : w[L - 1].close < lvl) continue;
+      const stop = bull ? ext - 0.2 * A : ext + 0.2 * A;
+      return plan(dir, bar, stop, { why: `Swept the ${min < 600 ? 'Asian' : 'London'} session ${bull ? 'low' : 'high'} ${lvl.toFixed(2)} and reclaimed it`, level: lvl, trap: true });
+    }
+    return null;
+  },
+
+  // Volume surge continuation in the 1H trend.
+  surge_go(ctx) {
+    const { w, a, htf } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    if (!htf || !htf.trend) return null;
+    const vAvg = avgVolume(w, L);
+    if (!(bar.volume >= 2.5 * vAvg)) return null;
+    const range = bar.high - bar.low;
+    if (!(Math.abs(bar.close - bar.open) >= 0.6 * range)) return null;
+    const dir = bar.close > bar.open ? 'bull' : 'bear';
+    if (dir !== htf.trend || !flowAgrees(bar, dir, 0.15)) return null;
+    let ext = true;
+    for (let k = L - 10; k < L; k++) if (dir === 'bull' ? w[k].high >= bar.close : w[k].low <= bar.close) ext = false;
+    if (!ext) return null;
+    const mid = (bar.high + bar.low) / 2;
+    const stop = dir === 'bull' ? mid - 0.2 * A : mid + 0.2 * A;
+    return plan(dir, bar, stop, { why: `${(bar.volume / vAvg).toFixed(1)}× volume surge with the trend` });
+  },
+
+  // VWAP reclaim in the 1H trend.
+  vwap_reclaim(ctx) {
+    const { w, a, vw, htf } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    if (!htf || !htf.trend || !vw || L < 5) return null;
+    const v = (i) => (vw[i] && vw[i].value != null ? vw[i].value : null);
+    const dir = htf.trend;
+    const bull = dir === 'bull';
+    const now = v(L);
+    if (now == null || !rejects(bar, dir) || !flowAgrees(bar, dir, 0.1) || !(bar.volume >= 1.2 * avgVolume(w, L))) return null;
+    if (bull ? !(bar.close > now) : !(bar.close < now)) return null;
+    for (let k = L - 3; k < L; k++) {
+      const x = v(k);
+      if (x == null || (bull ? w[k].close >= x : w[k].close <= x)) return null;
+    }
+    let ext = bar[bull ? 'low' : 'high'];
+    for (let k = L - 5; k < L; k++) ext = bull ? Math.min(ext, w[k].low) : Math.max(ext, w[k].high);
+    const stop = bull ? ext - 0.2 * A : ext + 0.2 * A;
+    return plan(dir, bar, stop, { why: `Reclaimed VWAP ${now.toFixed(2)} with the trend` });
+  },
+
+  // Inside-bar breakout in the 1H trend.
+  inside_break(ctx) {
+    const { w, a, htf } = ctx;
+    const L = w.length - 1;
+    if (L < 3 || !htf || !htf.trend) return null;
+    const bar = w[L];
+    const A = a[L];
+    const mom = w[L - 2];
+    const ins = w[L - 1];
+    if (!(ins.high <= mom.high && ins.low >= mom.low)) return null;
+    const dir = htf.trend;
+    const bull = dir === 'bull';
+    if (bull ? !(bar.close > mom.high) : !(bar.close < mom.low)) return null;
+    if (!flowAgrees(bar, dir, 0.1) || !(bar.volume >= 1.2 * avgVolume(w, L))) return null;
+    const stop = bull ? ins.low - 0.2 * A : ins.high + 0.2 * A;
+    return plan(dir, bar, stop, { why: `Inside-bar breakout ${bull ? 'above' : 'below'} ${(bull ? mom.high : mom.low).toFixed(2)}` });
   },
 
   // Trap confirmed by order flow: cumulative delta already points the trade's way.
@@ -496,9 +625,10 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
   const { w, a } = ctx;
   const L = w.length - 1;
   const bar = w[L];
-  if (rules.sessionOnly && !inSession(bar.time)) return [];
+  const inSess = !rules.sessionOnly || inSession(bar.time);
   const out = [];
   for (const id of ids) {
+    if (!inSess && !rules.allHours?.includes(id)) continue;
     const s = CHECKS[id](ctx);
     if (!s) continue;
     const risk = Math.abs(s.entry - s.stop);
