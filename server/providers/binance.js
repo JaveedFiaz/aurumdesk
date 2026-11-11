@@ -28,6 +28,11 @@ export function binanceBlockedUntil() {
   return limiter.blockedUntil;
 }
 
+// A ban seen in another thread applies here too: it is per IP.
+export function setBinanceBlocked(until) {
+  if (until > limiter.blockedUntil) limiter.blockedUntil = until;
+}
+
 async function pace() {
   const now = Date.now();
   const at = Math.max(now, limiter.nextFree);

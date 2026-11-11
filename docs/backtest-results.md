@@ -23,7 +23,7 @@ Bitcoin  1m   Sweep into zone 3R  83    36      39     1.28   0.20    7.1      1
 
 A play is **TRADING** only with 20+ trades, profit factor ≥ 1.15, an average of
 +0.05R or more, and a profit on the most recent 40% of its history. The server
-re-tests every play every 6 hours and switches it on or off accordingly.
+re-tests every play every 12 hours and switches it on or off accordingly.
 
 ## At double trading costs
 

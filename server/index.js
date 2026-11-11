@@ -14,6 +14,8 @@ import { analyze, dropFormingCandle } from '../shared/bot.js';
 import { MARKETS, PLAY_TFS } from '../shared/markets.js';
 import { DEFAULT_RULES } from '../shared/strategies.js';
 import { createNews } from './news.js';
+import { loadAndAnalyze, TAIL, HTF_TAIL } from './play.js';
+import { setBinanceBlocked } from './providers/binance.js';
 
 import { deltaSeries, tradeFlow, whales, bookStats } from '../shared/flow.js';
 import { createProviders } from './providers/index.js';
@@ -64,16 +66,17 @@ function mergeCandles(prev, fresh, n) {
   return prev.filter((x) => x.time < fresh[0].time).concat(fresh).slice(-n);
 }
 
-function runInWorker(c, h, opts) {
+function runInWorker(payload) {
   return new Promise((resolve, reject) => {
-    const w = new Worker(new URL('./bt-worker.js', import.meta.url));
+    const w = new Worker(new URL('./bt-worker.js', import.meta.url), { resourceLimits: { maxOldGenerationSizeMb: 256 } });
     w.once('message', (m) => {
       w.terminate();
-      if (m.ok) resolve(m.result);
-      else reject(new Error(m.error));
+      if (m.ok) return resolve(m.out);
+      if (m.blockedUntil) setBinanceBlocked(m.blockedUntil);
+      return reject(new Error(m.error));
     });
     w.once('error', reject);
-    w.postMessage({ c, h, opts });
+    w.postMessage(payload);
   });
 }
 
@@ -84,8 +87,10 @@ export function createApp({
   flowProviders = providers,
   pollMs = 3000,
   historyScale = 1,
-  useWorker = true,
-  retestMs = 6 * 3600 * 1000,
+  // Environment for createProviders() inside the backtest worker. Without it,
+  // backtests run in this thread (tests, small histories).
+  workerEnv = null,
+  retestMs = 12 * 3600 * 1000,
   cotSource = createCotSource({ demo: !!providers.gold.demo }),
   paper = createPaper(),
   news = createNews({ demo: !!providers.gold.demo }),
@@ -105,7 +110,8 @@ export function createApp({
     m,
     provider: providers[m.id],
     flow: flowProviders?.[m.id] || null,
-    hist: {}, // tf id -> closed + forming candles
+    hist: {}, // tf id -> the recent candles kept in memory (closed + forming)
+    want: {},
     plays: Object.fromEntries(PLAY_TFS.filter((tf) => m.plays[tf]).map((tf) => [tf, { full: null, live: null, error: null, testing: false, testedAt: 0, lastBar: 0 }])),
     ready: false,
     lastRefresh: 0,
@@ -138,34 +144,66 @@ export function createApp({
 
   const closedOf = (x, tf) => dropFormingCandle(x.hist[tf] || [], TF[tf].sec, Date.now() / 1000);
 
+  // One history load + backtest at a time, so memory and request rate stay low.
+  let chain = Promise.resolve();
+  const enqueue = (fn) => {
+    chain = chain.then(fn, fn);
+    return chain;
+  };
+
+  function adopt(x, tf, list, want) {
+    if (x.hist[tf] && x.hist[tf].length >= list.length) return; // already tracked live
+    x.hist[tf] = list;
+    x.fetched[tf] = list.at(-1)?.time ?? 0;
+    x.want[tf] = Math.max(x.want[tf] || 0, want);
+  }
+
+  // Loads the play's full history, backtests it, and keeps only the recent candles.
   async function fullTest(x, tf) {
     const st = x.plays[tf];
-    if (st.testing) return;
+    if (st.testing || closed) return;
     st.testing = true;
     try {
       const play = x.m.plays[tf];
-      const c = closedOf(x, tf);
-      const h = closedOf(x, play.htf);
-      const opts = playOpts(x, tf, { now: Date.now() / 1000 });
-      st.full = useWorker ? await runInWorker(c, h, opts) : analyze(c, h, opts);
+      const n = need(x, tf);
+      const job = {
+        tf: { id: tf, sec: TF[tf].sec },
+        htf: { id: play.htf, sec: TF[play.htf].sec },
+        n,
+        hn: Math.ceil((n * TF[tf].sec) / TF[play.htf].sec) + 320,
+        costBps: x.m.costBps,
+        opts: playOpts(x, tf),
+      };
+      const out = workerEnv ? await runInWorker({ env: workerEnv, market: x.m.id, job }) : await loadAndAnalyze(x.provider, job);
+      st.full = out.result;
       st.live = null;
       st.error = null;
       st.testedAt = Date.now();
-      log(`${x.m.label} ${tf} tested: ${st.full.stats.map((z) => `${z.id} ${z.trades} trades PF ${Number.isFinite(z.pf) ? z.pf.toFixed(2) : 'inf'} ${z.active ? 'TRADING' : 'watch'}`).join(', ')}`);
+      adopt(x, tf, out.c, TAIL);
+      adopt(x, play.htf, out.h, HTF_TAIL);
+      log(`${x.m.label} ${tf} tested on ${out.loaded} candles: ${st.full.stats.map((z) => `${z.id} ${z.trades} trades PF ${Number.isFinite(z.pf) ? z.pf.toFixed(2) : 'inf'} ${z.active ? 'TRADING' : 'watch'}`).join(', ')}`);
     } catch (e) {
       st.error = e.message;
-      st.testedAt = Date.now() - retestMs + 10 * 60000; // try again in 10 minutes
+      st.testedAt = Date.now() - retestMs + 5 * 60000; // try again in 5 minutes
       log(`${x.m.label} ${tf} backtest failed: ${e.message}`);
     } finally {
       st.testing = false;
+      st.queued = false;
     }
+  }
+
+  function queueTest(x, tf) {
+    const st = x.plays[tf];
+    if (st.queued) return;
+    st.queued = true;
+    enqueue(() => fullTest(x, tf).then(() => liveScan(x, tf)));
   }
 
   // Cheap scan of the latest candles for live setups, reusing the last full test's statistics.
   function liveScan(x, tf) {
     const st = x.plays[tf];
-    if (!st.full) return;
     const play = x.m.plays[tf];
+    if (!st.full || !x.hist[tf] || !x.hist[play.htf]) return;
     const c = closedOf(x, tf);
     const last = c.at(-1)?.time || 0;
     if (last === st.lastBar) return;
@@ -177,31 +215,6 @@ export function createApp({
       paper.onSignals(st.live.signals, prices[x.m.id] ?? c.at(-1)?.close, { id: x.m.id, label: x.m.label, costBps: x.m.costBps, step: x.m.id === 'btc' ? 0.0001 : 0.01 }, { pause });
     } catch (e) {
       st.error = e.message;
-    }
-  }
-
-  async function loadMarket(x) {
-    const tfs = new Set();
-    for (const tf of Object.keys(x.plays)) {
-      tfs.add(tf);
-      tfs.add(x.m.plays[tf].htf);
-    }
-    for (const tf of tfs) {
-      const n = x.plays[tf] ? need(x, tf) : 0;
-      const asHtf = Math.max(0, ...Object.keys(x.plays).filter((p) => x.m.plays[p].htf === tf).map((p) => Math.ceil((need(x, p) * TF[p].sec) / TF[tf].sec) + 320));
-      const want = Math.max(n, asHtf);
-      x.hist[tf] = await getCandles(x.provider, tf, want, { maxCandles: want + 100 });
-      x.fetched[tf] = x.hist[tf].at(-1)?.time ?? 0;
-      x.want = { ...x.want, [tf]: want };
-      if (closed) return;
-    }
-    x.ready = true;
-    log(`${x.m.label} history loaded: ${Object.entries(x.hist).map(([k, v]) => `${k} ${v.length}`).join(', ')}`);
-    // Shortest history first, so the 15m results appear quickly.
-    for (const tf of ['M15', 'M5', 'M1'].filter((t) => x.plays[t])) {
-      if (closed) return;
-      await fullTest(x, tf);
-      liveScan(x, tf);
     }
   }
 
@@ -220,14 +233,13 @@ export function createApp({
     }
     for (const tf of Object.keys(x.plays)) {
       liveScan(x, tf);
-      if (Date.now() - x.plays[tf].testedAt > retestMs && !x.plays[tf].testing) fullTest(x, tf).then(() => liveScan(x, tf));
+      if (Date.now() - x.plays[tf].testedAt > retestMs) queueTest(x, tf);
     }
   }
 
   // Keeps the newest candle of every loaded timeframe current between fetches,
   // so charts and order flow served from memory are never stale.
   function tickCandles(x, p, t = null) {
-    if (!x.ready) return;
     const now = Math.floor(Date.now() / 1000);
     const vol = t && x.flow === x.provider ? t.size : 0;
     for (const tf of Object.keys(x.hist)) {
@@ -291,7 +303,7 @@ export function createApp({
           if (Number.isFinite(p)) tickCandles(x, p);
         }
         x.err = null;
-        if (x.ready && Date.now() - x.lastRefresh > 5000) {
+        if (Date.now() - x.lastRefresh > 5000) {
           x.lastRefresh = Date.now();
           await refreshCandles(x);
         }
@@ -310,18 +322,8 @@ export function createApp({
     news.start();
     startStream();
     for (const x of markets) loop(x);
-    for (const x of markets) {
-      // A failed history load is retried every minute.
-      (async () => {
-        while (!closed && !x.ready) {
-          await loadMarket(x).catch((e) => {
-            for (const st of Object.values(x.plays)) st.error = e.message;
-            log(`${x.m.label} history load failed: ${e.message}`);
-          });
-          if (!x.ready) await sleep(60000 + Math.random() * 60000); // jittered, so several servers do not retry together
-        }
-      })();
-    }
+    // Shortest histories first, so the 15m results appear quickly.
+    for (const tf of ['M15', 'M5', 'M1']) for (const x of markets) if (x.plays[tf]) queueTest(x, tf);
   }
   const ready = autoStart ? boot() : Promise.resolve();
 
@@ -340,7 +342,7 @@ export function createApp({
     // Timeframes outside the plays (the daily candle for the day's change) change slowly.
     if (hit && Date.now() - hit.at < (x.hist[tfId] ? CACHE_MS : 60000)) return hit.promise;
     // Serve the play timeframes from memory when the history is loaded.
-    const promise = x.ready && x.hist[tfId] && x.hist[tfId].length >= limit && Date.now() / 1000 - x.hist[tfId].at(-1).time < TF[tfId].sec + 15
+    const promise = x.hist[tfId] && x.hist[tfId].length >= limit && Date.now() / 1000 - x.hist[tfId].at(-1).time < TF[tfId].sec + 15
       ? Promise.resolve(x.hist[tfId].slice(-limit))
       : getCandles(x.provider, tfId, limit);
     candleCache.set(key, { at: Date.now(), promise });
@@ -360,7 +362,7 @@ export function createApp({
       flowCache.set(`book:${x.m.id}`, { at: Date.now(), promise: bookP });
       bookP.catch(() => flowCache.delete(`book:${x.m.id}`));
     }
-    const mem = x.flow === x.provider && x.ready && x.hist[tfId];
+    const mem = x.flow === x.provider && x.hist[tfId];
     const tk = flowCache.get(`tape:${x.m.id}`);
     const tapeP = streaming(x) && x.tape.length >= 200 ? Promise.resolve(x.tape.slice(-1000))
       : tk && Date.now() - tk.at < 8000 ? tk.promise : x.flow.fetchTrades(1000);
@@ -496,6 +498,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const envFile = path.join(ROOT, '.env');
   if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
   if (process.argv.includes('--demo')) process.env.PROVIDER = 'demo';
+  const stamp = () => new Date().toISOString().slice(11, 19);
+  process.on('uncaughtException', (e) => console.error(`${stamp()} Uncaught error: ${e.stack || e}`));
+  process.on('unhandledRejection', (e) => console.error(`${stamp()} Unhandled rejection: ${e?.stack || e}`));
+  setInterval(() => console.log(`${stamp()} Memory ${Math.round(process.memoryUsage().rss / 1048576)} MB`), 10 * 60000).unref();
   const { providers, flowProviders } = createProviders(process.env);
   const port = +process.env.PORT || 3000;
   const paper = createPaper({ file: path.resolve(ROOT, process.env.DATA_DIR || 'data', 'paper.json') });
@@ -508,6 +514,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     newsPause: process.env.NEWS_PAUSE === '1',
     paper,
     adminToken,
+    workerEnv: { ...process.env },
     log: (msg) => console.log(`${new Date().toISOString().slice(11, 19)} ${msg}`),
   }).listen(port, () => {
     console.log(`Pulse Scalper running at http://localhost:${port}  (gold: ${providers.gold.label}, btc: ${providers.btc.label})`);
