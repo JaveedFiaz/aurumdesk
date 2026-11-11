@@ -70,9 +70,10 @@ are ready in about a minute and the 1m plays after about five. Setups appear
 once a timeframe's backtest finishes.
 
 **Hosting:** the Render blueprint (`render.yaml`) deploys it as a web service.
-Render's free plan sleeps after 15 minutes without visitors, and the
-auto-trader stops while it sleeps, so use a paid instance to run it around the
-clock. The server uses about 130 MB of memory, peaking near 200 MB while it
+Render's free plan stops a service after 15 minutes without visitors. On
+Render the server requests its own address every 10 minutes to stay awake
+(`KEEP_ALIVE=0` turns that off); a paid instance is the dependable way to run
+it around the clock. The server uses about 130 MB of memory, peaking near 200 MB while it
 backtests.
 
 ## Data
