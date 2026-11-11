@@ -186,3 +186,11 @@ test('HTTP API: both markets, every timeframe, flow, news, COT, stream and a gua
   while (!(buf.includes('"m":"gold"') && buf.includes('"m":"btc"'))) buf += new TextDecoder().decode((await reader.read()).value);
   await reader.cancel();
 });
+
+test('spot gold: the median mid of every quote, nothing from an empty feed', async () => {
+  const { parseSpot } = await import('../server/spot.js');
+  const q = (bid, ask) => ({ bid, ask });
+  assert.equal(parseSpot([{ spreadProfilePrices: [q(4056.7, 4057.3), q(4056.9, 4057.1)] }, { spreadProfilePrices: [q(4057.0, 4057.6)] }]), 4057);
+  assert.equal(parseSpot([]), null);
+  assert.equal(parseSpot([{ spreadProfilePrices: [q('x', 1)] }]), null);
+});

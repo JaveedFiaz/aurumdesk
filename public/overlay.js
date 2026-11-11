@@ -223,9 +223,14 @@ export class Overlay {
       this.box(x1, x2, Y(s.entry), Y(s.target), green(0.22), green(0.95));
       this.box(x1, x2, Y(s.entry), Y(s.stop), red(0.24), red(0.95));
       this.hline(x1, x2, Y(s.entry), '#e9e3ff', [], 2);
+      // Take-profit steps at 1R, 2R (and 3R) inside the target zone.
+      const risk = Math.abs(s.entry - s.stop);
+      const steps = Math.max(1, Math.round(Math.abs(s.target - s.entry) / risk));
+      for (let k = 1; k < steps; k++) this.hline(x1, x2, Y(s.entry + (bull ? 1 : -1) * k * risk), green(0.7), [3, 3], 1);
       if (ease < 1) continue;
-      this.tag(`${bull ? '▲ BUY' : '▼ SELL'} ${s.entry.toFixed(2)} · ${s.status === 'open' ? 'running' : 'new'}`, x1 - 6, Y(s.entry), '#e9e3ff', 'right', true);
-      this.tag(`TP ${s.target.toFixed(2)} · ${(s.rr || 2).toFixed(1)}R`, right - 6, Y(s.target) + (bull ? 9 : -9), COLORS.bull, 'right', true);
+      for (let k = 1; k < steps; k++) this.tag(`TP${k} · ${k}R`, right - 6, Y(s.entry + (bull ? 1 : -1) * k * risk), COLORS.bull, 'right');
+      // The BUY/SELL marker on the candle and the setup card name the trade; no extra label here.
+      this.tag(`TP${steps} ${s.target.toFixed(2)} · ${steps}R`, right - 6, Y(s.target) + (bull ? 9 : -9), COLORS.bull, 'right', true);
       this.tag(`SL ${s.stop.toFixed(2)}`, right - 6, Y(s.stop) + (bull ? -9 : 9), COLORS.bear, 'right', true);
       if (s.trap && s.level) {
         const si = idx(s.signalTime);

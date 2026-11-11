@@ -4,6 +4,8 @@ import { STRATEGY_BY_ID } from '/shared/strategies.js';
 import { Overlay } from '/overlay.js';
 import { sessionsNow } from '/sessions.js';
 import { feed } from '/feed.js';
+import { binance } from '/live.js';
+import { deltaSeries, tradeFlow, whales as findWhales, bookStats } from '/shared/flow.js';
 import { $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, spark, deltaChart } from '/ui.js';
 
 const LC = window.LightweightCharts;
@@ -16,7 +18,7 @@ const DN = '#ff5fa2';
 const store = {
   get(k, d) {
     try {
-      const v = localStorage.getItem(`scalper2:${k}`);
+      const v = localStorage.getItem(`scalper3:${k}`);
       return v == null ? d : JSON.parse(v);
     } catch {
       return d;
@@ -24,7 +26,7 @@ const store = {
   },
   set(k, v) {
     try {
-      localStorage.setItem(`scalper2:${k}`, JSON.stringify(v));
+      localStorage.setItem(`scalper3:${k}`, JSON.stringify(v));
     } catch { /* storage unavailable */ }
   },
 };
@@ -38,7 +40,7 @@ const LAYERS = [
   { id: 'walls', label: 'Book walls' },
   { id: 'vwap', label: 'VWAP' },
 ];
-const DEFAULT_LAYERS = { signals: true, surges: true, structure: true, zones: false, ob: false, liq: true, walls: true, vwap: true, htf: false, sr: false, profile: false };
+const DEFAULT_LAYERS = { signals: true, surges: true, structure: false, zones: false, ob: false, liq: true, walls: true, vwap: true, htf: false, sr: false, profile: false };
 const TFS = ['M1', 'M5', 'M15'];
 
 const state = {
@@ -65,8 +67,21 @@ const state = {
   tape: [], // rolling live trades of the current market
   streamOn: false,
   formDirty: false,
+  basis: {}, // market -> spot minus the traded market (gold: spot XAU minus PAXG)
+  live: { stop: null, trades: [], book: null, deep: null, shift: 0, market: null, tf: null },
 };
 const mk = () => state.cfg.markets.find((m) => m.id === state.market) || { id: state.market, label: state.market, unit: '' };
+const mkOf = (id) => state.cfg.markets.find((m) => m.id === id) || {};
+// Gold is shown at spot prices while its candles, book and signals come from
+// PAXG: everything from PAXG is shifted by the live spot-minus-PAXG gap.
+const basisOf = (m = state.market) => (mkOf(m).spot ? state.basis[m] || 0 : 0);
+const SHIFT_FIELDS = ['entry', 'stop', 'target', 'level', 'exit', 'top', 'bottom', 'price', 'open', 'high', 'low', 'close'];
+function sh(o, k) {
+  if (!k || !o) return o;
+  const r = { ...o };
+  for (const f of SHIFT_FIELDS) if (typeof r[f] === 'number') r[f] += k;
+  return r;
+}
 
 // ---- Chart ---------------------------------------------------------------------
 
@@ -133,8 +148,32 @@ async function load({ soft = false } = {}) {
   const seq = ++state.seq;
   if (!soft) $('loading').hidden = false;
   try {
-    const candles = await feed.candles(market, tf, 600);
+    const m = mk();
+    if (m.spot && state.basis[market] == null) {
+      try {
+        const b = await feed.bot(market);
+        if (b.basis) state.basis[market] = b.basis;
+      } catch { /* shown unshifted until the stream sends it */ }
+    }
+    let raw = null;
+    if (m.binance) {
+      try {
+        raw = await binance.candles(m.binance, tf, 600);
+      } catch { /* fall back to the server */ }
+    }
+    if (!raw) raw = await feed.candles(market, tf, 600);
     if (seq !== state.seq) return;
+    const k = basisOf(market);
+    const candles = raw.map((c) => sh(c, k));
+    // The open candle follows the spot price, not the thinner PAXG market.
+    const sp = m.spot ? state.prices[market] : null;
+    const last = candles[candles.length - 1];
+    if (sp && last) {
+      last.close = sp;
+      last.high = Math.max(last.high, sp);
+      last.low = Math.min(last.low, sp);
+    }
+    state.live.shift = k;
     const range = soft ? chart.timeScale().getVisibleLogicalRange() : null;
     state.candles = candles;
     state.surges = findSurges(candles);
@@ -143,7 +182,9 @@ async function load({ soft = false } = {}) {
     if (range) chart.timeScale().setVisibleLogicalRange(range);
     else chart.timeScale().setVisibleLogicalRange({ from: candles.length - 110, to: candles.length + 12 });
     runAnalysis();
+    drawMarkers();
     $('banner').hidden = true;
+    if (state.live.market !== market || state.live.tf !== tf) startLive();
   } catch (e) {
     if (seq === state.seq) {
       $('banner').textContent = `Could not load ${mk().label} ${TF[tf].label} candles: ${e.message}`;
@@ -152,6 +193,151 @@ async function load({ soft = false } = {}) {
   } finally {
     if (seq === state.seq) $('loading').hidden = true;
   }
+}
+
+// ---- Live data straight from the exchange ----------------------------------------
+
+let flowDirty = false;
+let bookDirty = false;
+
+function startLive() {
+  state.live.stop?.();
+  state.live.stop = null;
+  const { market, tf } = state;
+  const m = mk();
+  state.live = { ...state.live, market, tf, trades: [], book: null, deep: null };
+  if (!m.binance) {
+    state.streamOn = false;
+    renderPills();
+    loadFlow();
+    return;
+  }
+  const mine = () => state.live.market === market && state.live.tf === tf;
+  binance.trades(m.binance).then((ts) => {
+    if (!mine()) return;
+    state.live.trades = ts.concat(state.live.trades);
+    flowDirty = true;
+    refreshFlow(true);
+  }).catch(() => {});
+  loadDeepBook();
+  state.live.stop = binance.connect(m.binance, tf, {
+    state: (on) => {
+      state.streamOn = on;
+      renderPills();
+    },
+    candle: (k) => mine() && onKline(k),
+    trade: (t) => mine() && onLiveTrade(market, t),
+    book: (b) => {
+      if (!mine()) return;
+      state.live.book = b;
+      bookDirty = true;
+    },
+  });
+}
+
+// The top 20 levels stream 10 times a second; deeper levels (for walls) are
+// refreshed from a snapshot every few seconds.
+async function loadDeepBook() {
+  const m = mk();
+  if (!m.binance) return;
+  try {
+    const b = await binance.book(m.binance, 500);
+    if (state.live.market === state.market) {
+      state.live.deep = b;
+      bookDirty = true;
+    }
+  } catch { /* the streamed top of book still shows */ }
+}
+
+function mergedBook() {
+  const live = state.live.book;
+  const deep = state.live.deep;
+  if (!live && !deep) return null;
+  if (!live) return deep;
+  if (!deep) return live;
+  const minBid = live.bids[live.bids.length - 1]?.price ?? Infinity;
+  const maxAsk = live.asks[live.asks.length - 1]?.price ?? -Infinity;
+  return {
+    bids: live.bids.concat(deep.bids.filter((l) => l.price < minBid)),
+    asks: live.asks.concat(deep.asks.filter((l) => l.price > maxAsk)),
+  };
+}
+
+function volBar(c) {
+  const up = c.buyVolume != null ? c.buyVolume * 2 >= c.volume : c.close >= c.open;
+  return { time: c.time, value: c.volume || 0, color: up ? 'rgba(52,245,197,0.28)' : 'rgba(255,95,162,0.28)' };
+}
+
+// The open candle from the exchange: volume and buyer volume always; prices
+// too, except for spot-priced markets whose candle follows the spot ticks.
+function onKline(k) {
+  const c = state.candles;
+  const last = c[c.length - 1];
+  if (!last) return;
+  const spot = mk().spot && state.prices[state.market] != null;
+  const s = sh(k, state.live.shift);
+  let cur;
+  if (s.time === last.time) {
+    cur = last;
+    if (!spot) Object.assign(cur, { open: s.open, high: s.high, low: s.low, close: s.close });
+  } else if (s.time > last.time) {
+    const p = spot ? state.prices[state.market] : s.close;
+    cur = spot ? { time: s.time, open: p, high: p, low: p, close: p } : { time: s.time, open: s.open, high: s.high, low: s.low, close: s.close };
+    c.push(cur);
+    if (c.length > 900) c.splice(0, c.length - 800);
+    newCandle();
+  } else return;
+  cur.volume = s.volume;
+  cur.buyVolume = s.buyVolume;
+  candleSeries.update(bar(cur));
+  volumeSeries.update(volBar(cur));
+  flowDirty = true;
+}
+
+let refreshTimer = null;
+// A candle closed: re-read structure and zones, and fetch new setups shortly after.
+function newCandle() {
+  state.surges = findSurges(state.candles);
+  runAnalysis();
+  drawMarkers();
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(loadBots, 2500);
+}
+
+function onLiveTrade(market, t) {
+  if (!mkOf(market).spot) queuePrice(market, t.price, t.time);
+  const tr = state.live.trades;
+  tr.push(t);
+  if (tr.length > 3000) tr.splice(0, tr.length - 2000);
+  state.tape.push(t);
+  tapeDirty = true;
+  const min = state.whaleMin[market];
+  if (min && t.size >= min) addWhale({ ...t, price: t.price + state.live.shift, notional: t.size * t.price }, true);
+}
+
+// Order flow, whales and book from the live data, in the shape the panels use.
+function refreshFlow(force = false) {
+  if (!mk().binance || (!flowDirty && !bookDirty && !force)) return;
+  const k = state.live.shift;
+  const tr = state.live.trades.slice(-1000).map((t) => ({ ...t, price: t.price + k }));
+  const b = mergedBook();
+  state.flow = {
+    available: true,
+    live: state.streamOn,
+    source: `${mk().binance} · live`,
+    basis: k,
+    delta: deltaSeries(state.candles.slice(-120)),
+    tape: tradeFlow(tr),
+    whales: findWhales(tr),
+    book: b ? bookStats({ bids: b.bids.map((l) => sh(l, k)), asks: b.asks.map((l) => sh(l, k)) }, { bucket: state.market === 'btc' ? 10 : 0.5, range: 0.004 }) : state.flow?.book || null,
+  };
+  if (flowDirty || force) {
+    renderFlow();
+    renderWhales();
+  }
+  renderLiq();
+  flowDirty = false;
+  bookDirty = false;
 }
 
 function runAnalysis() {
@@ -165,16 +351,34 @@ function runAnalysis() {
 
 const play = () => state.bots[state.market]?.tfs?.[state.tf];
 
+// BUY / SELL labels on the chart at every signal candle of this timeframe.
+function drawMarkers() {
+  const b = play();
+  if (!b || b.pending || !state.layers.signals || !state.candles.length) {
+    candleSeries.setMarkers([]);
+    return;
+  }
+  const first = state.candles[0].time;
+  const list = [...b.recent, ...b.signals, ...b.watch].filter((t) => t.signalTime >= first);
+  const seen = new Set();
+  candleSeries.setMarkers(list.filter((t) => !seen.has(t.signalTime) && seen.add(t.signalTime)).sort((x, y) => x.signalTime - y.signalTime).map((t) => {
+    const long = t.dir === 'bull';
+    const res = t.status === 'closed' ? (t.r > 0 ? ' ✓' : ' ✗') : '';
+    return { time: t.signalTime, position: long ? 'belowBar' : 'aboveBar', color: long ? UP : DN, shape: long ? 'arrowUp' : 'arrowDown', text: `${long ? 'BUY' : 'SELL'}${res}`, size: 1.4 };
+  }));
+}
+
 function pushOverlay() {
   const b = play();
+  const k = basisOf();
   const first = state.candles[0]?.time ?? 0;
   const trade = b && !b.pending ? {
-    areas: b.areas,
-    triggers: b.triggers,
-    live: [...b.signals, ...b.watch],
-    history: b.recent.filter((t) => t.entryTime >= first).slice(-25),
-    surges: state.layers.surges ? (state.surges || []).slice(-5) : [],
-  } : { surges: state.layers.surges ? (state.surges || []).slice(-5) : [] };
+    areas: b.areas.map((a) => sh(a, k)),
+    triggers: b.triggers.map((g) => sh(g, k)),
+    live: [...b.signals, ...b.watch].map((t) => sh(t, k)),
+    history: b.recent.filter((t) => t.entryTime >= first).slice(-25).map((t) => sh(t, k)),
+    surges: state.layers.surges ? (state.surges || []).slice(-3) : [],
+  } : { surges: state.layers.surges ? (state.surges || []).slice(-3) : [] };
   overlay.update({ candles: state.candles, result: state.result, htf: null, layers: state.layers, trade });
 }
 
@@ -220,8 +424,8 @@ function renderPills() {
   const open = s.filter((x) => x.open).map((x) => x.name);
   const m = mk();
   $('pills').innerHTML = [
-    state.cfg.demo ? '<span class="pill demo">DEMO DATA</span>' : `<span class="pill" title="Price feed">${esc(m.source || '')}</span>`,
-    `<span class="pill ${state.streamOn ? 'on' : ''}" title="Live trade stream for whales and order flow">${state.streamOn ? 'Trades: live stream' : 'Trades: 3 s refresh'}</span>`,
+    state.cfg.demo ? '<span class="pill demo">DEMO DATA</span>' : `<span class="pill on" title="Price shown in the header and on the chart">${esc(m.spotSource || m.binance || m.source || '')}</span>`,
+    `<span class="pill ${state.streamOn ? 'on' : ''}" title="Candles, trades and order book">${state.streamOn ? '● Live stream' : m.binance ? 'Connecting…' : 'Refreshing every 4 s'}</span>`,
     kill ? `<span class="pill kill">${kill.name} open · killzone</span>` : `<span class="pill ${open.length ? 'on' : ''}">${open.length ? open.join(' + ') : 'Sessions closed'}</span>`,
   ].join('');
 }
@@ -242,11 +446,12 @@ function switchTo(market, tf) {
     $('whales').innerHTML = '';
     $('price').textContent = fmt(state.prices[market]);
   }
+  state.live.stop?.();
+  state.live = { ...state.live, stop: null, market: null, tf: null, trades: [], book: null, deep: null };
   renderHeader();
   renderPills();
   renderChange();
   load();
-  loadFlow();
   renderHero();
   renderScore();
   renderNews();
@@ -271,6 +476,7 @@ $('layers').addEventListener('click', (e) => {
   if (id === 'vwap') vwapSeries.setData(state.layers.vwap ? vwap(state.candles, vwapAnchor(TF[state.tf])) : []);
   if (id === 'walls') drawWalls();
   if (id === 'surges') volumeSeries.setData(volBars(state.candles, state.layers.surges ? state.surges : []));
+  if (id === 'signals') drawMarkers();
   pushOverlay();
 });
 
@@ -299,7 +505,6 @@ $('views').addEventListener('click', (e) => {
 
 // ---- Live prices and trades -------------------------------------------------------
 
-let refreshTimer = null;
 function onPrice(market, p, t = nowSec()) {
   const prev = state.prices[market];
   state.prices[market] = p;
@@ -320,14 +525,10 @@ function onPrice(market, p, t = nowSec()) {
     last.close = p;
     candleSeries.update(bar(last));
   } else if (b > last.time) {
-    const fresh = { time: b, open: p, high: p, low: p, close: p, volume: 0 };
+    const fresh = { time: b, open: p, high: p, low: p, close: p, volume: 0, buyVolume: 0 };
     c.push(fresh);
     candleSeries.update(bar(fresh));
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => {
-      load({ soft: true });
-      loadBots();
-    }, 2500);
+    newCandle();
   }
 }
 
@@ -347,8 +548,9 @@ function renderChange() {
 async function loadDayOpen() {
   for (const m of state.cfg.markets) {
     try {
-      const days = await feed.candles(m.id, 'D1', 3);
-      state.dayOpen[m.id] = days[days.length - 1]?.open ?? null;
+      const days = m.binance ? await binance.candles(m.binance, 'D1', 2) : await feed.candles(m.id, 'D1', 3);
+      const o = days[days.length - 1]?.open;
+      state.dayOpen[m.id] = o != null ? o + basisOf(m.id) : null;
     } catch { /* change stays blank */ }
   }
   renderChange();
@@ -371,15 +573,6 @@ function queuePrice(market, p, t) {
   });
 }
 
-function onTrade(market, t) {
-  queuePrice(market, t.price + (market === state.market ? (state.flow?.basis || 0) : 0), Math.floor(t.time));
-  if (market !== state.market) return;
-  state.tape.push(t);
-  tapeDirty = true;
-  const min = state.whaleMin[market];
-  if (min && t.size >= min) addWhale({ ...t, price: t.price + (state.flow?.basis || 0), notional: t.size * t.price }, true);
-}
-
 // ---- Setup panel -------------------------------------------------------------------
 
 function candidates() {
@@ -398,9 +591,10 @@ function renderHero() {
   if (!b) return;
   const { list, tradable, ready } = candidates();
   const best = list[0];
+  const k = basisOf();
   const waits = Object.entries(b.tfs).flatMap(([tf, t]) => (t.pending ? [] : [
-    ...t.areas.map((a) => `<div class="wait ${a.dir}">${TF[tf].label} · ${a.dir === 'bull' ? 'BUY' : 'SELL'} AREA ${fmt(a.bottom)}–${fmt(a.top)}<span>${esc(a.kind)} retest · SL ${fmt(a.stop)} · TP ${fmt(a.target)}</span></div>`),
-    ...t.triggers.map((g) => `<div class="wait ${g.dir}">${TF[tf].label} · ${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}<span>on a high-volume breakout at the London/NY open</span></div>`),
+    ...t.areas.map((a) => sh(a, k)).map((a) => `<div class="wait ${a.dir}">${TF[tf].label} · ${a.dir === 'bull' ? 'BUY' : 'SELL'} AREA ${fmt(a.bottom)}–${fmt(a.top)}<span>${esc(a.kind)} retest · SL ${fmt(a.stop)} · TP ${fmt(a.target)}</span></div>`),
+    ...t.triggers.map((g) => sh(g, k)).map((g) => `<div class="wait ${g.dir}">${TF[tf].label} · ${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}<span>on a high-volume breakout at the London/NY open</span></div>`),
   ]));
   const key = best ? `${sigId(best)}:${best.status}:${tradable}` : `none:${ready}:${waits.join('').length}:${Object.values(b.tfs).map((t) => (t.pending ? 'p' : 'r')).join('')}`;
   if (key === state.heroKey) return;
@@ -413,7 +607,7 @@ function renderHero() {
       ${waits.slice(0, 4).join('')}`;
     return;
   }
-  const t = best;
+  const t = sh(best, k);
   const long = t.dir === 'bull';
   const risk = Math.abs(t.entry - t.stop);
   const okCount = t.factors.filter((f) => f.ok).length;
@@ -440,6 +634,7 @@ function checkNewSignals() {
   for (const s of all) {
     if (prev.has(`${s.market}:${sigId(s)}`) || s.status !== 'pending') continue;
     const m = state.cfg.markets.find((x) => x.id === s.market);
+    Object.assign(s, sh(s, basisOf(s.market)));
     toast(`<b>New ${esc(m?.label || s.market)} ${TF[s.tf].label} setup:</b> ${s.dir === 'bull' ? 'BUY' : 'SELL'} · ${esc(stratName(s.strategy))} · entry ≈ ${fmt(s.entry)}`);
     beep();
     if ('Notification' in window && Notification.permission === 'granted') {
@@ -475,6 +670,7 @@ async function loadBots() {
   renderBias();
   checkNewSignals();
   pushOverlay();
+  drawMarkers();
 }
 
 // ---- Order flow, whales, liquidity ------------------------------------------------
@@ -556,7 +752,7 @@ function renderWhales() {
   const total = w.buyVol + w.sellVol;
   $('whaleSum').innerHTML = total ? `<div class="labels"><span class="bull">Whale buys ${pct(w.buyVol / total)}</span><span class="bear">Whale sells ${pct(w.sellVol / total)}</span></div><div class="bar2"><i style="width:${((w.buyVol / total) * 100).toFixed(1)}%"></i></div>` : '';
   const first = state.whaleList.length === 0;
-  for (const t of w.list.slice().reverse()) addWhale(t, !first);
+  if (first || !state.streamOn) for (const t of w.list.slice().reverse()) addWhale(t, !first);
   if (!state.whaleList.length) $('whales').innerHTML = '<li class="empty">No large trades in the recent tape</li>';
 }
 
@@ -590,6 +786,7 @@ function renderLiq() {
 
 async function loadFlow() {
   const { market, tf } = state;
+  if (mk().binance && state.streamOn) return;
   try {
     const f = await feed.flow(market, tf);
     if (market !== state.market || tf !== state.tf) return;
@@ -685,9 +882,12 @@ function renderPositions() {
   const p = state.paper;
   if (!p) return;
   let unreal = 0;
-  $('positions').innerHTML = p.positions.map((x) => {
+  $('positions').innerHTML = p.positions.map((x0) => {
+    let x = x0;
+    const kk = basisOf(x.market);
     const price = state.prices[x.market];
-    const pl = Number.isFinite(price) ? (x.dir === 'bull' ? 1 : -1) * (price - x.entry) * x.units : 0;
+    const pl = Number.isFinite(price) ? (x.dir === 'bull' ? 1 : -1) * (price - kk - x.entry) * x.units : 0;
+    x = sh(x, kk);
     unreal += pl;
     return `<li class="pos"><span><b class="${x.dir}">${x.dir === 'bull' ? '▲ LONG' : '▼ SHORT'}</b> ${esc(x.label)} ${esc(x.tf)}</span><b class="mono ${pl >= 0 ? 'bull' : 'bear'}">${money(pl)}</b><span class="det">${+x.units.toFixed(4)} @ ${fmt(x.entry)} · SL ${fmt(x.stop)} · TP ${fmt(x.target)}</span></li>`;
   }).join('') || '<li class="empty">No open trades</li>';
@@ -790,10 +990,9 @@ async function boot() {
     $('tv').hidden = false;
     showTradingView();
   }
+  await loadBots(); // also brings the spot-gold basis, so gold candles load already shifted
   load();
   loadDayOpen();
-  loadBots();
-  loadFlow();
   loadNews();
   loadPaper();
   const dot = $('liveDot');
@@ -801,22 +1000,24 @@ async function boot() {
     if (d.error) return;
     dot.className = 'live-dot on';
     dot.title = 'Live';
-    if (!state.streamOn || d.m !== state.market) onPrice(d.m, d.p, d.t);
+    if (d.basis != null) state.basis[d.m] = d.basis;
+    // Spot-priced markets (gold) take every spot tick from the server; others
+    // take their price from the exchange stream while it is connected.
+    if (d.spot != null) queuePrice(d.m, d.spot, d.t);
+    else if (!(state.streamOn && d.m === state.market)) queuePrice(d.m, d.p, d.t);
   }, () => {
     dot.className = 'live-dot err';
     dot.title = 'Reconnecting…';
-  });
-  feed.trades(Object.fromEntries(state.cfg.markets.map((m) => [m.id, m.stream])), onTrade, (on) => {
-    state.streamOn = on;
-    renderPills();
   });
   setInterval(() => {
     if (tapeDirty || !state.streamOn) renderTapeSplit();
     tapeDirty = false;
     renderPositions();
   }, 500);
+  setInterval(() => refreshFlow(), 400); // live book, delta and whales
+  setInterval(loadDeepBook, 4000);
   setInterval(loadBots, 5000);
-  setInterval(loadFlow, 4000);
+  setInterval(loadFlow, 4000); // only used when a market has no direct exchange feed
   setInterval(loadNews, 2000);
   setInterval(loadPaper, 3000);
   setInterval(() => load({ soft: true }), 60000);
