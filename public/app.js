@@ -4,7 +4,7 @@ import { STRATEGY_BY_ID } from '/shared/strategies.js';
 import { Overlay } from '/overlay.js';
 import { sessionsNow } from '/sessions.js';
 import { feed } from '/feed.js';
-import { binance } from '/live.js';
+import { binance, goldPerp } from '/live.js';
 import { deltaSeries, tradeFlow, whales as findWhales, bookStats } from '/shared/flow.js';
 import { $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, spark, deltaChart } from '/ui.js';
 
@@ -162,10 +162,38 @@ async function load({ soft = false } = {}) {
         raw = await binance.candles(m.binance, tf, 600);
       } catch { /* fall back to the server */ }
     }
+    // Gold: a real-time chart feed (gold perpetual, or spot-built candles).
+    const goldReq = m.goldChart ? feed.gold(tf, 600).catch(() => null) : null;
     if (!raw) raw = await feed.candles(market, tf, 600);
+    let gold = goldReq ? await goldReq : null;
+    if (m.goldChart && !(gold && /perpetual/.test(gold.source)) && state.perpOk !== false) {
+      try {
+        const f = await goldPerp(tf, 600);
+        const sp = state.prices[market];
+        const shift = sp != null ? sp - f[f.length - 1].close : 0;
+        gold = { source: 'Binance XAUUSDT perpetual', candles: f.map((c) => ({ ...c, open: c.open + shift, high: c.high + shift, low: c.low + shift, close: c.close + shift })) };
+        state.perpOk = true;
+      } catch {
+        state.perpOk = false; // blocked here: stop asking
+      }
+    }
     if (seq !== state.seq) return;
     const k = basisOf(market);
-    const candles = raw.map((c) => sh(c, k));
+    let candles = raw.map((c) => sh(c, k));
+    state.live.perp = false;
+    state.live.chartSource = null;
+    if (gold && gold.candles.length > 30 && /perpetual/.test(gold.source)) {
+      candles = gold.candles;
+      state.live.perp = true;
+      state.live.chartSource = gold.source;
+    } else if (gold && gold.candles.length) {
+      const byTime = new Map(gold.candles.map((c) => [c.time, c]));
+      candles = candles.map((c) => {
+        const g = byTime.get(c.time);
+        return g ? { ...c, open: g.open, high: g.high, low: g.low, close: g.close } : c;
+      });
+      state.live.chartSource = gold.source;
+    }
     // The open candle follows the spot price, not the thinner PAXG market.
     const sp = m.spot ? state.prices[market] : null;
     const last = candles[candles.length - 1];
@@ -288,11 +316,31 @@ function onKline(k) {
     if (c.length > 900) c.splice(0, c.length - 800);
     newCandle();
   } else return;
-  cur.volume = s.volume;
-  cur.buyVolume = s.buyVolume;
+  if (!state.live.perp) {
+    cur.volume = s.volume;
+    cur.buyVolume = s.buyVolume;
+  }
   candleSeries.update(bar(cur));
   volumeSeries.update(volBar(cur));
   flowDirty = true;
+}
+
+// The gold perpetual's volume for the latest candles (prices follow spot ticks).
+async function refreshPerpVolume() {
+  if (!state.live.perp || state.view === 'tv') return;
+  const { market, tf } = state;
+  try {
+    const g = state.perpOk ? { candles: await goldPerp(tf, 3) } : await feed.gold(tf, 3);
+    if (state.market !== market || state.tf !== tf) return;
+    const byTime = new Map(state.candles.slice(-5).map((c) => [c.time, c]));
+    for (const x of g.candles) {
+      const c = byTime.get(x.time);
+      if (!c) continue;
+      c.volume = x.volume;
+      c.buyVolume = x.buyVolume;
+      volumeSeries.update(volBar(c));
+    }
+  } catch { /* next pass */ }
 }
 
 let refreshTimer = null;
@@ -370,17 +418,36 @@ function drawMarkers() {
   }));
 }
 
+// Buy and sell zones are always on the chart: the strategies' own areas, and
+// otherwise the strongest fresh demand below and supply above price.
+function withZones(areas) {
+  const r = state.result;
+  const c = state.candles;
+  if (!r || !c.length) return areas;
+  const price = c[c.length - 1].close;
+  const out = [...areas];
+  for (const dir of ['bull', 'bear']) {
+    if (out.some((a) => a.dir === dir)) continue;
+    const bull = dir === 'bull';
+    const z = [...r.zones, ...r.orderBlocks]
+      .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price))
+      .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))[0];
+    if (z) out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply' });
+  }
+  return out;
+}
+
 function pushOverlay() {
   const b = play();
   const k = basisOf();
   const first = state.candles[0]?.time ?? 0;
   const trade = b && !b.pending ? {
-    areas: b.areas.map((a) => sh(a, k)),
+    areas: withZones(b.areas.map((a) => sh(a, k))),
     triggers: b.triggers.map((g) => sh(g, k)),
     live: [...b.signals, ...b.watch].map((t) => sh(t, k)),
     history: b.recent.filter((t) => t.entryTime >= first).slice(-25).map((t) => sh(t, k)),
     surges: state.layers.surges ? (state.surges || []).slice(-3) : [],
-  } : { surges: state.layers.surges ? (state.surges || []).slice(-3) : [] };
+  } : { areas: withZones([]), surges: state.layers.surges ? (state.surges || []).slice(-3) : [] };
   overlay.update({ candles: state.candles, result: state.result, htf: null, layers: state.layers, trade });
 }
 
@@ -661,11 +728,52 @@ function renderHero() {
 }
 
 // The guide in the corner of the chart: what to do right now.
+// The guide card can be dragged anywhere on the chart; the spot is remembered.
+function setGuide(el, html, cls) {
+  const full = html ? `<div class="grip" title="Drag to move">⠿ drag</div>${html}` : '';
+  if (el.className.replace(' dragging', '') !== cls) el.className = cls;
+  if (full !== el._html) {
+    el._html = full;
+    el.innerHTML = full;
+  }
+}
+
+function initGuideDrag() {
+  const el = $('guide');
+  const wrap = el.parentElement;
+  const place = (p) => {
+    if (!p) return;
+    const maxX = Math.max(0, wrap.clientWidth - el.offsetWidth - 4);
+    const maxY = Math.max(0, wrap.clientHeight - el.offsetHeight - 30);
+    el.style.left = `${Math.max(4, Math.min(maxX, p.x))}px`;
+    el.style.top = `${Math.max(4, Math.min(maxY, p.y))}px`;
+  };
+  place(store.get('guidePos', null));
+  let start = null;
+  el.addEventListener('pointerdown', (e) => {
+    start = { x: e.clientX, y: e.clientY, l: el.offsetLeft, t: el.offsetTop };
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    place({ x: start.l + e.clientX - start.x, y: start.t + e.clientY - start.y });
+  });
+  const end = () => {
+    if (!start) return;
+    start = null;
+    el.classList.remove('dragging');
+    store.set('guidePos', { x: el.offsetLeft, y: el.offsetTop });
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+}
+
 function renderGuide() {
   const el = $('guide');
   const b = state.bots[state.market];
   if (!b || state.view === 'tv') {
-    el.innerHTML = '';
+    setGuide(el, '', 'guide');
     return;
   }
   const k = basisOf();
@@ -689,24 +797,23 @@ function renderGuide() {
     const span = Math.abs(t.target - t.stop);
     const pos = Math.max(0, Math.min(1, (sign * (price - t.stop)) / span));
     const away = (p) => `${signed(p - price)}`;
-    el.className = `guide active ${t.dir}`;
-    el.innerHTML = `<div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${esc(mk().label)}</span><span class="gs">${TF[t.tf].label} · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
+    setGuide(el, `<div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${esc(mk().label)}</span><span class="gs">${TF[t.tf].label} · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
       <div class="muted">${esc(stratName(t.strategy))}</div>
       <div class="gr"><span>TARGET</span><b class="bull">${fmt(t.target)}</b><i>${away(t.target)}</i></div>
       ${Array.from({ length: steps - 1 }, (_, n) => `<div class="gr"><span>TP${n + 1}</span><b class="bull">${fmt(t.entry + sign * (n + 1) * risk)}</b><i>${away(t.entry + sign * (n + 1) * risk)}</i></div>`).join('')}
       <div class="gr"><span>ENTRY</span><b>${fmt(t.entry)}</b><i>${away(t.entry)}</i></div>
       <div class="gr"><span>STOP</span><b class="bear">${fmt(t.stop)}</b><i>${away(t.stop)}</i></div>
       <div class="prog" style="--e:${((1 / (steps + 1)) * 100).toFixed(1)}%"><b style="left:${(pos * 100).toFixed(1)}%"></b></div>
-      <div class="gr"><span>NOW</span><b>${fmt(price)}</b><i class="${r >= 0 ? 'bull' : 'bear'}" style="font-weight:800">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</i></div>`;
+      <div class="gr"><span>NOW</span><b>${fmt(price)}</b><i class="${r >= 0 ? 'bull' : 'bear'}" style="font-weight:800">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</i></div>`, `guide active ${t.dir}`);
     return;
   }
   const waits = plays.flatMap(([tf, t]) => [
     ...t.areas.map((a) => sh(a, k)).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })),
     ...t.triggers.map((g) => sh(g, k)).map((g) => ({ tf, dir: g.dir, text: `${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}`, at: g.price })),
+    ...(tf === state.tf ? withZones([]).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })) : []),
   ]).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
-  el.className = 'guide';
-  el.innerHTML = `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
-    ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`;
+  setGuide(el, `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
+    ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`, 'guide');
 }
 
 function flashSignal(s) {
@@ -754,13 +861,14 @@ function renderScore() {
 }
 
 async function loadBots() {
-  for (const m of state.cfg.markets) {
+  await Promise.all(state.cfg.markets.map(async (m) => {
     try {
       state.bots[m.id] = await feed.bot(m.id);
     } catch { /* retried on the next pass */ }
-  }
+  }));
   renderHero();
   renderScore();
+  renderTrack();
   renderHeader();
   renderBias();
   checkNewSignals();
@@ -963,7 +1071,7 @@ function renderPaper() {
     $('equitySpark').innerHTML = spark(eq.length > 1 ? eq : [p.startBalance, p.startBalance], { h: 52 });
   }
   renderPositions();
-  $('botLog').innerHTML = p.log.slice(0, 8).map((l) => `<li><time>${clock(l.t)}</time><span>${esc(l.msg)}</span></li>`).join('') || '<li class="empty">No activity yet. Trades appear here as setups fire.</li>';
+  $('botLog').innerHTML = p.log.slice(0, 8).map((l) => `<li><time>${clock(l.t)}</time><span>${esc(l.msg)}</span></li>`).join('') || `<li class="empty">No trades since ${p.equity[0] ? new Date(p.equity[0].t * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'the server started'}. The auto-trader opens a trade the moment a proven strategy fires (none has since). The free server restarts the paper account when it redeploys, so the Track record below shows the strategies' last 30 days.</li>`;
   $('history').innerHTML = p.history.map((h) => `<li><time>${new Date(h.exitTime * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time><span><b class="${h.dir}">${h.dir === 'bull' ? '▲' : '▼'}</b> ${esc(h.label)} ${esc(h.tf)} · ${esc(stratName(h.strategy))} · ${esc(h.reason)}</span><b class="mono ${h.pnl >= 0 ? 'bull' : 'bear'}">${money(h.pnl)} (${signed(h.r, 1)}R)</b></li>`).join('') || '<li class="empty">No closed trades yet</li>';
   if (state.seenLog != null) {
     for (const l of p.log) {
@@ -993,6 +1101,49 @@ function renderPositions() {
   $('pnl').textContent = `${pnl >= 0 ? '+' : '−'}$${fmt(Math.abs(pnl))}`;
   $('pnl').className = `mono pnl ${pnl >= 0 ? 'bull' : 'bear'}`;
   $('pnlPct').textContent = `${signed((equity / p.startBalance - 1) * 100)}% · today ${money(p.dayPnl)}`;
+}
+
+// Every trade the proven strategies took over the last 30 days, both markets,
+// replayed as a $10,000 account risking 1% per trade. The paper account below
+// only counts trades since the server last started; this shows the longer record.
+let trackKey = '';
+function renderTrack() {
+  const all = [];
+  for (const [mid, b] of Object.entries(state.bots)) {
+    for (const t of Object.values(b?.tfs || {})) {
+      if (t.pending) continue;
+      for (const x of t.recent) if (x.active && x.status === 'closed') all.push({ ...x, market: mid });
+    }
+  }
+  const from = nowSec() - 30 * 86400;
+  const list = all.filter((x) => x.exitTime >= from).sort((a, z) => a.exitTime - z.exitTime);
+  const key = `${list.length}:${list[list.length - 1]?.exitTime}`;
+  if (key === trackKey) return;
+  trackKey = key;
+  if (!list.length) {
+    $('trackMeta').textContent = '';
+    $('track').innerHTML = `<div class="empty">${Object.keys(state.bots).length ? 'No closed trades from the proven strategies in the last 30 days.' : 'Loading the strategy results…'}</div>`;
+    return;
+  }
+  let eq = 10000;
+  const curve = [eq];
+  for (const x of list) {
+    eq += eq * 0.01 * x.r;
+    curve.push(eq);
+  }
+  const wins = list.filter((x) => x.r > 0);
+  const gw = wins.reduce((a, x) => a + x.r, 0);
+  const gl = -list.filter((x) => x.r <= 0).reduce((a, x) => a + x.r, 0);
+  const totalR = list.reduce((a, x) => a + x.r, 0);
+  const week = list.filter((x) => x.exitTime >= nowSec() - 7 * 86400);
+  const weekR = week.reduce((a, x) => a + x.r, 0);
+  $('trackMeta').textContent = 'last 30 days · proven strategies · both markets · $10,000 at 1% risk';
+  $('track').innerHTML = `<div class="track-top">
+    <div class="track-eq"><div class="big mono ${eq >= 10000 ? 'bull' : 'bear'}">${money(eq)}</div><div class="muted small">${signed((eq / 100 - 100))}% · ${signed(totalR, 1)}R</div></div>
+    <div class="kpis"><div>${list.length}<span>trades</span></div><div>${pct(wins.length / list.length)}<span>won</span></div><div>${gl ? (gw / gl).toFixed(2) : '∞'}<span>profit factor</span></div><div class="${weekR >= 0 ? 'bull' : 'bear'}">${signed(weekR, 1)}R<span>last 7 days</span></div></div>
+  </div>
+  <div class="spark-wrap">${spark(curve, { h: 60 })}</div>
+  <ol class="history">${list.slice(-12).reverse().map((h) => `<li><time>${new Date(h.exitTime * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time><span><b class="${h.dir}">${h.dir === 'bull' ? '▲ LONG' : '▼ SHORT'}</b> ${esc(mkOf(h.market).label)} ${esc(TF[h.tf]?.label || h.tf)} · ${esc(stratName(h.strategy))} · ${esc(h.reason || '')}</span><b class="mono ${h.r >= 0 ? 'bull' : 'bear'}">${signed(h.r, 1)}R</b></li>`).join('')}</ol>`;
 }
 
 async function loadPaper() {
@@ -1086,8 +1237,9 @@ async function boot() {
     $('tv').hidden = false;
     showTradingView();
   }
-  await loadBots(); // also brings the spot-gold basis, so gold candles load already shifted
-  load();
+  initGuideDrag();
+  loadBots();
+  load(); // fetches the spot-gold basis itself when it is not known yet
   loadDayOpen();
   loadNews();
   loadPaper();
@@ -1113,6 +1265,7 @@ async function boot() {
   }, 500);
   setInterval(() => refreshFlow(), 400); // live book, delta and whales
   setInterval(loadDeepBook, 4000);
+  setInterval(refreshPerpVolume, 3000);
   setInterval(loadBots, 5000);
   setInterval(loadFlow, 4000); // only used when a market has no direct exchange feed
   setInterval(loadNews, 2000);

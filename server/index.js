@@ -16,6 +16,7 @@ import { DEFAULT_RULES } from '../shared/strategies.js';
 import { createNews } from './news.js';
 import { loadAndAnalyze, TAIL, HTF_TAIL } from './play.js';
 import { createSpotGold } from './spot.js';
+import { createGoldCandles } from './goldfeed.js';
 import { setBinanceBlocked } from './providers/binance.js';
 
 import { deltaSeries, tradeFlow, whales, bookStats } from '../shared/flow.js';
@@ -100,6 +101,7 @@ export function createApp({
   autoStart = true,
   log = () => {},
   spot = null, // live spot price feed for gold (shown instead of PAXG)
+  goldCandles = null, // real-time gold chart candles (perpetual or spot-built)
 }) {
   const clients = new Set();
   const candleCache = new Map();
@@ -271,6 +273,7 @@ export function createApp({
   const tickMsg = (id) => ({ m: id, t: Math.floor(Date.now() / 1000), p: prices[id], ...(spotPrice[id] != null ? { spot: spotPrice[id], basis: basis[id] ?? 0 } : {}) });
   function onSpot(id, s) {
     spotPrice[id] = s;
+    if (id === 'gold') goldCandles?.onSpot(s);
     const p = prices[id];
     if (Number.isFinite(p)) {
       const gap = s - p;
@@ -463,6 +466,7 @@ export function createApp({
             binance: x.provider.name === 'binance' ? x.provider.symbol : null,
             spot: !!spot && x.m.id === 'gold',
             spotSource: spot && x.m.id === 'gold' ? 'Swissquote spot XAU/USD' : null,
+            goldChart: !!goldCandles && x.m.id === 'gold',
           })),
         });
       }
@@ -471,6 +475,11 @@ export function createApp({
         if (!TF[tf]) return send(res, 400, { error: `Unknown timeframe ${tf}` });
         const limit = Math.max(10, Math.min(MAX_LIMIT, parseInt(q.get('limit'), 10) || 500));
         return send(res, 200, { tf, candles: await candles(market(), tf, limit) });
+      }
+      if (url.pathname === '/api/goldcandles') {
+        if (!goldCandles) return send(res, 404, { error: 'No real-time gold chart feed' });
+        const limit = Math.max(10, Math.min(1000, parseInt(q.get('limit'), 10) || 600));
+        return send(res, 200, await goldCandles.get(q.get('tf') || 'M1', limit, spotPrice.gold ?? null));
       }
       if (url.pathname === '/api/bot') return send(res, 200, botView(market()));
       if (url.pathname === '/api/flow') {
@@ -549,6 +558,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     adminToken,
     workerEnv: { ...process.env },
     spot: providers.gold.demo || process.env.SPOT_GOLD === '0' ? null : createSpotGold(),
+    goldCandles: providers.gold.demo || process.env.SPOT_GOLD === '0' ? null : createGoldCandles({ log: (msg) => console.log(`${stamp()} ${msg}`) }),
     log: (msg) => console.log(`${new Date().toISOString().slice(11, 19)} ${msg}`),
   }).listen(port, () => {
     console.log(`Pulse Scalper running at http://localhost:${port}  (gold: ${providers.gold.label}, btc: ${providers.btc.label})`);

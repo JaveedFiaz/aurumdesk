@@ -65,8 +65,14 @@ export class Overlay {
     const y0 = this.series.priceToCoordinate(1000);
     const y1 = this.series.priceToCoordinate(2000);
     const sig = [this.version, w, h, range && range.from.toFixed(2), range && range.to.toFixed(2), y0, y1].join('|');
-    if (sig === this.sig && !this.hasLive && performance.now() - (this.animStart || 0) > 1000) return;
+    const t = performance.now();
+    if (sig === this.sig) {
+      // Nothing moved: redraw only to animate (a growing box, or a live trade's
+      // pulse at ~24 frames a second to keep the page light).
+      if (t - (this.animStart || 0) > 1000 && (!this.hasLive || t - (this.drawnAt || 0) < 42)) return;
+    }
     this.sig = sig;
+    this.drawnAt = t;
 
     const dpr = window.devicePixelRatio || 1;
     if (this.canvas.width !== Math.round(w * dpr) || this.canvas.height !== Math.round(h * dpr)) {
@@ -192,9 +198,20 @@ export class Overlay {
       const bull = a.dir === 'bull';
       const i = idx(a.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
-      this.box(x1, right, Y(a.top), Y(a.bottom), bull ? green(0.12) : red(0.12), bull ? green(0.8) : red(0.8), true);
-      this.hline(x1, right, Y(a.stop), bull ? red(0.6) : green(0.6), [4, 4], 1);
-      this.pill(`${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`, right - 6, Y(bull ? a.top : a.bottom) + (bull ? -11 : 11), bull ? '#34f5c5' : '#ff5fa2', '#140a2e', 'right');
+      const yt = Y(a.top);
+      const yb = Y(a.bottom);
+      if (yt == null || yb == null) continue;
+      const grad = this.ctx.createLinearGradient(x1, 0, right, 0);
+      grad.addColorStop(0, bull ? green(a.watch ? 0.03 : 0.06) : red(a.watch ? 0.03 : 0.06));
+      grad.addColorStop(1, bull ? green(a.watch ? 0.16 : 0.24) : red(a.watch ? 0.16 : 0.24));
+      this.ctx.fillStyle = grad;
+      this.ctx.fillRect(x1, Math.min(yt, yb), right - x1, Math.max(2, Math.abs(yb - yt)));
+      this.box(x1, right, yt, yb, 'rgba(0,0,0,0)', bull ? green(a.watch ? 0.5 : 0.85) : red(a.watch ? 0.5 : 0.85), true);
+      if (a.stop != null) this.hline(x1, right, Y(a.stop), bull ? red(0.6) : green(0.6), [4, 4], 1);
+      const label = a.watch
+        ? `${bull ? 'BUY ZONE' : 'SELL ZONE'} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}`
+        : `${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`;
+      this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch ? 'rgba(52,245,197,0.75)' : '#34f5c5') : (a.watch ? 'rgba(255,95,162,0.75)' : '#ff5fa2'), '#140a2e', 'right');
     }
 
     for (const g of t.triggers || []) {

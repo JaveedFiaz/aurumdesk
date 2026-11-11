@@ -11,6 +11,7 @@ async function getJSON(url, opts) {
 export const feed = {
   config: () => getJSON('/api/config'),
   candles: async (market, tf, limit) => (await getJSON(`/api/candles?market=${market}&tf=${tf}&limit=${limit}`)).candles,
+  gold: (tf, limit) => getJSON(`/api/goldcandles?tf=${tf}&limit=${limit}`),
   bot: (market) => getJSON(`/api/bot?market=${market}`),
   flow: (market, tf) => getJSON(`/api/flow?market=${market}&tf=${tf}`),
   news: () => getJSON('/api/news'),
