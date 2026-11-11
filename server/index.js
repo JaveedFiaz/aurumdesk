@@ -297,8 +297,9 @@ export function createApp({
         }
       } catch (e) {
         broadcast({ m: x.m.id, error: e.message });
-        if (x.err !== e.message) log(`${x.m.label} feed error: ${e.message}`);
-        x.err = e.message;
+        const kind = e.message.replace(/\d+/g, '#'); // log each kind of error once, not every countdown tick
+        if (x.err !== kind) log(`${x.m.label} feed error: ${e.message}`);
+        x.err = kind;
       }
       await sleep(x.provider.pollMs && x.provider.pollMs > pollMs ? x.provider.pollMs : pollMs);
     }
@@ -317,7 +318,7 @@ export function createApp({
             for (const st of Object.values(x.plays)) st.error = e.message;
             log(`${x.m.label} history load failed: ${e.message}`);
           });
-          if (!x.ready) await sleep(60000);
+          if (!x.ready) await sleep(60000 + Math.random() * 60000); // jittered, so several servers do not retry together
         }
       })();
     }
