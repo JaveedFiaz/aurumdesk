@@ -185,7 +185,7 @@ export function createApp({
       st.testedAt = Date.now();
       adopt(x, tf, out.c, TAIL);
       adopt(x, play.htf, out.h, HTF_TAIL);
-      log(`${x.m.label} ${tf} tested on ${out.loaded} candles: ${st.full.stats.map((z) => `${z.id} ${z.trades} trades PF ${Number.isFinite(z.pf) ? z.pf.toFixed(2) : 'inf'} ${z.active ? 'TRADING' : 'watch'}`).join(', ')}`);
+      log(`${x.m.label} ${tf} tested on ${out.loaded} candles: ${st.full.stats.map((z) => `${z.id} (${Math.round((z.gate ?? 0.75) * 8)}/8+) ${z.trades} trades PF ${Number.isFinite(z.pf) ? z.pf.toFixed(2) : 'inf'} ${z.active ? 'TRADING' : 'watch'}`).join(', ')}`);
     } catch (e) {
       st.error = e.message;
       st.testedAt = Date.now() - retestMs + 5 * 60000; // try again in 5 minutes

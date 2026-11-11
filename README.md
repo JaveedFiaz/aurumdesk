@@ -26,20 +26,26 @@ automatically so you can track performance.
 Only strategies that made money on real history, in both the first 60% and the
 last 40% of the period, are traded ([full results](docs/backtest-results.md)):
 
-| Market | Timeframe | Strategy | Target | Result |
-|---|---|---|---|---|
-| Gold | 15m | Zone retest | 2R | 45 trades in 2 years, PF 1.58, +13.5R |
-| Gold | 15m | Volume breakout | 3R | 98 trades in 2 years, PF 1.41, +26.5R |
-| Gold | 5m | Trap + order flow | 2R | 137 trades in 1 year, PF 1.28, +23.2R |
-| Gold | 1m | Sweep into zone | 3R | 45 trades in 83 days, PF 1.17, +5.8R |
-| Bitcoin | 15m | Trap with trend | 2R | 78 trades in 2 years, PF 1.69, +27.3R |
-| Bitcoin | 5m | Trap + order flow | 2R | PF 1.14: watch only |
-| Bitcoin | 1m | Sweep into zone | 3R | fails on recent data: watch only |
+Every setup is scored on 8 confluence checks (7 for Bitcoin, which has no COT
+data). A setup is traded only with **6 of 8 or more** (7 of 8 where that
+backtests better). Each strategy is re-tested with that filter, and only those
+still profitable on enough trades are traded:
 
-The server re-tests every play every 12 hours. A play is traded only while it
-has 20+ trades, profit factor ≥ 1.15, an average of +0.05R or more, and a
-profit on the most recent 40% of its history. Otherwise its setups are shown as
-**watch only** and the auto-trader ignores them.
+| Market | Timeframe | Strategy | Target | With the 6/8 quality filter | Status |
+|---|---|---|---|---|---|
+| Gold | 15m | Volume breakout | 3R | 83 trades in 2 years, 40% won, PF 1.64, +33.4R | **Trading** |
+| Gold | 15m | Zone retest | 2R | 16 trades, PF 1.33 (too few) | watch only |
+| Gold | 5m | Trap + order flow | 2R | 39 trades, PF 0.77 | watch only |
+| Gold | 1m | Sweep into zone | 3R | 24 trades, PF 0.98 | watch only |
+| Bitcoin | 15m | Trap with trend | 2R | 6 trades (too few) | watch only |
+| Bitcoin | 5m | Trap + order flow | 2R | 9 trades, PF 2.23 (too few) | watch only |
+| Bitcoin | 1m | Sweep into zone | 3R | 16 trades, PF 2.16 (too few) | watch only |
+
+The server re-tests every play every 12 hours. A play is traded only while,
+with the quality filter, it has 20+ trades, profit factor ≥ 1.15, an average of
++0.05R or more, and a profit on the most recent 40% of its history. Watch-only
+setups are drawn faintly on the chart with their confluence score; the
+auto-trader ignores them.
 
 Gold 1m only works with tight spreads: at double trading costs it loses money.
 Bitcoin has no proven 1m or 5m strategy yet.

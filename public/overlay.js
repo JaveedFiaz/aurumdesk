@@ -5,12 +5,12 @@
 import { volumeProfile } from '/shared/analysis.js';
 
 export const COLORS = {
-  demand: [52, 245, 197],
-  supply: [255, 95, 162],
-  bullOB: [52, 245, 197],
-  bearOB: [255, 95, 162],
-  bull: '#34f5c5',
-  bear: '#ff5fa2',
+  demand: [22, 199, 132],
+  supply: [234, 57, 67],
+  bullOB: [22, 199, 132],
+  bearOB: [234, 57, 67],
+  bull: '#16c784',
+  bear: '#ea3943',
   sr: '#c3bde0',
   liq: '#c4b5fd',
   pd: '#e9e3ff',
@@ -113,14 +113,16 @@ export class Overlay {
 
     if (result) {
       if (layers.zones) {
-        for (const z of result.zones) {
+        // Very tall zones (a base inside a huge candle) would paint half the chart.
+        const fits = (z) => !(result.atr > 0) || z.top - z.bottom <= 2.5 * result.atr;
+        for (const z of result.zones.filter(fits)) {
           const col = COLORS[z.kind];
           this.box(X(z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.16), rgba(col, 0.5));
           this.tag(`${z.kind === 'demand' ? 'Demand' : 'Supply'} ${z.score}`, right - 6, (Y(z.top) + Y(z.bottom)) / 2, rgba(col, 1), 'right');
         }
       }
       if (layers.ob) {
-        for (const z of result.orderBlocks) {
+        for (const z of result.orderBlocks.filter((z) => !(result.atr > 0) || z.top - z.bottom <= 2.5 * result.atr)) {
           const col = COLORS[z.kind];
           this.box(X(z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.22), rgba(col, 0.9));
           this.tag(z.kind === 'bullOB' ? 'Bull OB' : 'Bear OB', Math.max(4, X(z.index) + 4), (Y(z.top) + Y(z.bottom)) / 2, rgba(col, 1), 'left');
@@ -176,8 +178,8 @@ export class Overlay {
       const i = lowerBound(candles, time + 1) - 1;
       return i < 0 ? null : i;
     };
-    const green = (a) => `rgba(52,245,197,${a})`;
-    const red = (a) => `rgba(255,95,162,${a})`;
+    const green = (a) => `rgba(22,199,132,${a})`;
+    const red = (a) => `rgba(234,57,67,${a})`;
     const lastX = X(candles.length - 1);
 
     for (const p of t.history || []) {
@@ -194,7 +196,8 @@ export class Overlay {
       this.tag(`${win ? '+' : ''}${p.r.toFixed(1)}R`, x2 + 3, Y(win ? p.target : p.stop), win ? COLORS.bull : COLORS.bear, 'left', true);
     }
 
-    for (const a of t.areas || []) {
+    const hasLive = !!(t.live && t.live.length);
+    for (const a of (t.areas || []).filter((x) => !(hasLive && x.watch))) {
       const bull = a.dir === 'bull';
       const i = idx(a.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
@@ -211,7 +214,7 @@ export class Overlay {
       const label = a.watch
         ? `${bull ? 'BUY ZONE' : 'SELL ZONE'} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}`
         : `${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`;
-      this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch ? 'rgba(52,245,197,0.75)' : '#34f5c5') : (a.watch ? 'rgba(255,95,162,0.75)' : '#ff5fa2'), '#140a2e', 'right');
+      this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch ? 'rgba(22,199,132,0.75)' : '#16c784') : (a.watch ? 'rgba(234,57,67,0.75)' : '#ea3943'), '#140a2e', 'right');
     }
 
     for (const g of t.triggers || []) {
@@ -219,7 +222,7 @@ export class Overlay {
       const i = idx(g.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
       this.hline(x1, right, Y(g.price), bull ? green(0.9) : red(0.9), [8, 4], 1.5);
-      this.pill(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} on a volume breakout`, right - 6, Y(g.price) + (bull ? -11 : 11), bull ? '#34f5c5' : '#ff5fa2', '#140a2e', 'right');
+      this.pill(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} on a volume breakout`, right - 6, Y(g.price) + (bull ? -11 : 11), bull ? '#16c784' : '#ea3943', '#140a2e', 'right');
     }
 
     // Live setups, drawn like a long/short position tool anchored at the signal
@@ -250,8 +253,10 @@ export class Overlay {
       const yS = Y(s.stop);
       const yT = Y(s.target);
       if (yE == null || yS == null || yT == null) continue;
-      this.box(x0, x2, yE, yT, green(0.18), green(0.9));
-      this.box(x0, x2, yE, yS, red(0.2), red(0.9));
+      // Quality trades are solid; setups below the confluence bar are faint and dashed.
+      const f = s.q ? 1 : 0.4;
+      this.box(x0, x2, yE, yT, green(0.24 * f), green(0.95 * f), !s.q);
+      this.box(x0, x2, yE, yS, red(0.26 * f), red(0.95 * f), !s.q);
       // How far price has moved inside the box.
       const risk = Math.abs(s.entry - s.stop);
       if (Number.isFinite(price) && ease === 1) {
@@ -277,12 +282,16 @@ export class Overlay {
       this.tag(`STOP ${fx(s.stop)}  −${fx(risk)}`, lx, yS + (bull ? -10 : 10), COLORS.bear, 'right', true);
       // Badge at the start of the box.
       // Badge just outside the stop side of the box, clear of the price labels.
-      this.pill(`${bull ? '▲ LONG' : '▼ SHORT'}  R:R 1:${(Math.abs(s.target - s.entry) / risk).toFixed(1)}`, x0, bull ? Math.max(yE, yS) + 13 : Math.min(yE, yS) - 13, bull ? '#34f5c5' : '#ff5fa2', '#140a2e');
+      const cf = s.conf ? ` · ${s.conf.passed}/${s.conf.of} confluence` : '';
+      const badge = s.q
+        ? `${bull ? '▲ LONG' : '▼ SHORT'}  R:R 1:${(Math.abs(s.target - s.entry) / risk).toFixed(1)}${cf} ✓`
+        : `WATCH ONLY · ${bull ? 'long' : 'short'}${cf} (needs ${s.conf ? s.conf.need : 6})`;
+      this.pill(badge, x0, bull ? Math.max(yE, yS) + 13 : Math.min(yE, yS) - 13, s.q ? (bull ? '#16c784' : '#ea3943') : 'rgba(196,181,253,0.85)', '#140a2e');
       this.boxFrom = Math.min(this.boxFrom ?? Infinity, x0);
       if (Number.isFinite(price)) {
         const r = (sign * (price - s.entry)) / risk;
         const yP = Y(price);
-        if (yP != null) this.pill(`${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, x2 + 6, yP, r >= 0 ? '#34f5c5' : '#ff5fa2', '#140a2e');
+        if (yP != null) this.pill(`${r >= 0 ? '+' : ''}${r.toFixed(2)}R`, x2 + 6, yP, r >= 0 ? '#16c784' : '#ea3943', '#140a2e');
       }
       if (s.trap && s.level) {
         this.hline(Math.max(0, x0 - barW * 16), x0, Y(s.level), '#c4b5fd', [3, 3], 1);

@@ -17,6 +17,14 @@ const WARMUP = 120;
 // AND on the later, unseen part of the history (out-of-sample).
 export const APPROVAL = { minTrades: 20, minPF: 1.15, minExpR: 0.05, oosShare: 0.4 };
 
+// Quality gate: a setup is traded only when at least 6 of 8 confluence checks
+// pass (7 of 8 where that still proves an edge). Each strategy uses the
+// level whose backtest passes APPROVAL with the best average result; if
+// neither level passes, the strategy is shown as watch only.
+export const QUALITY = [0.875, 0.75];
+export const confPassed = (t) => (t.factors || []).filter((f) => f.ok).length;
+export const confRatio = (t) => (t.factors && t.factors.length ? confPassed(t) / t.factors.length : 0);
+
 const dayKey = (t) => Math.floor(t / 86400);
 
 function closeTrade(t, bar, price, reason, rules) {
@@ -186,15 +194,32 @@ export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES
   const from = prior ? prior.from : c[Math.min(WARMUP, c.length - 1)].time;
   const to = c[c.length - 1].time + tf.sec;
   const splitTime = to - (to - from) * APPROVAL.oosShare;
-  const stats = prior ? prior.stats : include.map((s) => ({ ...summarize(trades, s.id, splitTime), name: STRATEGY_BY_ID[s.id]?.name || s.id, desc: STRATEGY_BY_ID[s.id]?.desc || '', rr: rules.rrBy[s.id] ?? rules.rr }))
-    .sort((a, b) => (b.active - a.active) || (b.expR - a.expR));
-  const active = new Set(stats.filter((s) => s.active).map((s) => s.id));
+  const gated = (id, g) => trades.filter((t) => t.strategy !== id || confRatio(t) >= g);
+  const stats = prior ? prior.stats : include.map((s) => {
+    let gate = QUALITY[QUALITY.length - 1];
+    let sum = null;
+    for (const g of QUALITY) {
+      const x = summarize(gated(s.id, g), s.id, splitTime);
+      if (x.active && (!sum || x.expR > sum.expR)) {
+        gate = g;
+        sum = x;
+      }
+    }
+    sum = sum || summarize(gated(s.id, gate), s.id, splitTime);
+    const all = summarize(trades, s.id, splitTime);
+    return { ...sum, gate, all: { trades: all.trades, winRate: all.winRate, pf: all.pf, totalR: all.totalR }, name: STRATEGY_BY_ID[s.id]?.name || s.id, desc: STRATEGY_BY_ID[s.id]?.desc || '', rr: rules.rrBy[s.id] ?? rules.rr };
+  }).sort((a, b) => (b.active - a.active) || (b.expR - a.expR));
+  const gateOf = Object.fromEntries(stats.map((s) => [s.id, s.gate ?? QUALITY[QUALITY.length - 1]]));
+  const playOn = new Set(stats.filter((s) => s.active).map((s) => s.id));
+  const quality = (t) => confRatio(t) >= gateOf[t.strategy];
+  const isTraded = (t) => playOn.has(t.strategy) && quality(t);
   const grades = prior ? prior.grades : gradeStats(trades);
   const byGrade = Object.fromEntries(grades.map((g) => [g.grade, g]));
   const strip = ({ plannedRisk, bars, ...t }) => ({
     ...t,
     tf: tf.id,
-    active: active.has(t.strategy),
+    active: isTraded(t),
+    conf: { passed: confPassed(t), of: (t.factors || []).length, need: Math.ceil(gateOf[t.strategy] * (t.factors || []).length - 1e-9) },
     expected: byGrade[t.grade] ? { winRate: byGrade[t.grade].winRate, expR: byGrade[t.grade].expR, trades: byGrade[t.grade].trades } : null,
   });
   let recent = trades.filter((t) => t.status === 'closed').map(strip);
@@ -221,9 +246,9 @@ export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES
     // Where the strategies would act next (drawn as buy/sell areas on the chart).
     ...tradeAreas(buildContext(c.slice(-WINDOW), buildHtf(h.slice(-HTF_WINDOW))), rules, ids),
     // Setups waiting for the next bar's open, and trades still running.
-    signals: trades.filter((t) => t.status !== 'closed' && active.has(t.strategy)).map(strip),
+    signals: trades.filter((t) => t.status !== 'closed' && isTraded(t)).map(strip),
     // The same from strategies that have not proven an edge: shown, never traded.
-    watch: trades.filter((t) => t.status !== 'closed' && !active.has(t.strategy)).map(strip),
+    watch: trades.filter((t) => t.status !== 'closed' && !isTraded(t)).map(strip),
     recent: recent.slice(-120),
     ...(full ? { closed: trades.filter((t) => t.status === 'closed').map(strip) } : {}),
   };
