@@ -27,19 +27,25 @@ Only strategies that made money on real history, in both the first 60% and the
 last 40% of the period, are traded ([full results](docs/backtest-results.md)):
 
 Every setup is scored on 8 confluence checks (7 for Bitcoin, which has no COT
-data). A setup is traded only with **6 of 8 or more** (7 of 8 where that
-backtests better). Each strategy is re-tested with that filter, and only those
-still profitable on enough trades are traded:
+data). Each strategy trades only at the confluence level where its backtest is
+strongest: 6 or 7 of 8 when that still passes the profit gate, otherwise 5 of 8,
+otherwise no filter. About 1.4 trades a day across both markets:
 
-| Market | Timeframe | Strategy | Target | With the 6/8 quality filter | Status |
-|---|---|---|---|---|---|
-| Gold | 15m | Volume breakout | 3R | 83 trades in 2 years, 40% won, PF 1.64, +33.4R | **Trading** |
-| Gold | 15m | Zone retest | 2R | 16 trades, PF 1.33 (too few) | watch only |
-| Gold | 5m | Trap + order flow | 2R | 39 trades, PF 0.77 | watch only |
-| Gold | 1m | Sweep into zone | 3R | 24 trades, PF 0.98 | watch only |
-| Bitcoin | 15m | Trap with trend | 2R | 6 trades (too few) | watch only |
-| Bitcoin | 5m | Trap + order flow | 2R | 9 trades, PF 2.23 (too few) | watch only |
-| Bitcoin | 1m | Sweep into zone | 3R | 16 trades, PF 2.16 (too few) | watch only |
+| Market | TF | Strategy | Target | Min. confluence | Trades | Win % | PF | Total R |
+|---|---|---|---|---|---|---|---|---|
+| Gold | 15m | Volume breakout | 3R | 6/8 | 84 in 2 years | 40 | 1.70 | +36.4 |
+| Gold | 15m | Zone retest | 2R | 5/8 | 30 in 2 years | 47 | 1.65 | +9.8 |
+| Gold | 15m | EMA trend pullback | 3R | 7/8 | 57 in 2 years | 39 | 1.27 | +9.9 |
+| Gold | 5m | Session sweep | 3R | 6/8 | 46 in 1 year | 39 | 1.50 | +14.8 |
+| Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
+| Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
+| Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |
+| Bitcoin | 15m | Volume surge go | 2R | 7/7 | 78 in 2 years | 41 | 1.27 | +13.3 |
+| Bitcoin | 5m | Session sweep | 3R | 5/7 | 63 in 1 year | 49 | 1.88 | +30.4 |
+| Bitcoin | 5m | Trap + order flow | 1.5R | 5/7 | 39 in 1 year | 49 | 1.23 | +5.0 |
+
+At double trading costs every gold and Bitcoin 15m strategy stays profitable;
+the two Bitcoin 5m strategies drop to watch only. The 1m strategies stay on watch.
 
 The server re-tests every play every 12 hours. A play is traded only while,
 with the quality filter, it has 20+ trades, profit factor ≥ 1.15, an average of

@@ -19,9 +19,12 @@ export const APPROVAL = { minTrades: 20, minPF: 1.15, minExpR: 0.05, oosShare: 0
 
 // Quality gate: a setup is traded only when at least 6 of 8 confluence checks
 // pass (7 of 8 where that still proves an edge). Each strategy uses the
-// level whose backtest passes APPROVAL with the best average result; if
-// neither level passes, the strategy is shown as watch only.
+// level whose backtest passes APPROVAL with the best average result. Only if
+// neither passes does it fall back to 5 of 8, then to no filter; if nothing
+// passes, the strategy is shown as watch only.
 export const QUALITY = [0.875, 0.75];
+// Used only when neither quality level passes: 5 of 8, then no filter.
+export const QUALITY_FALLBACK = [0.625, 0];
 export const confPassed = (t) => (t.factors || []).filter((f) => f.ok).length;
 export const confRatio = (t) => (t.factors && t.factors.length ? confPassed(t) / t.factors.length : 0);
 
@@ -81,7 +84,9 @@ export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATE
       if (t.status === 'closed') live.delete(id);
     }
 
-    if (rules.sessionOnly && !inSession(bar.time)) continue;
+    // Outside London/New York only strategies cleared for all hours (crypto) scan.
+    const inSess = !rules.sessionOnly || inSession(bar.time);
+    if (!inSess && !rules.allHours?.length) continue;
 
     // 1H candles that had fully closed when this 15m bar closed.
     const closeAt = bar.time + tfSec;
@@ -91,7 +96,7 @@ export function backtest(c, h = [], { rules = DEFAULT_RULES, strategies = STRATE
       htf = buildHtf(h.slice(Math.max(0, hIdx - HTF_WINDOW), hIdx));
     }
 
-    const todo = strategies.filter((id) => !live.has(id) && (perDay.get(`${id}:${dayKey(bar.time)}`) || 0) < rules.maxPerDay);
+    const todo = strategies.filter((id) => (inSess || rules.allHours.includes(id)) && !live.has(id) && (perDay.get(`${id}:${dayKey(bar.time)}`) || 0) < rules.maxPerDay);
     if (!todo.length) continue;
     const ctx = buildContext(c.slice(Math.max(0, i - WINDOW + 1), i + 1), htf);
     for (const s of scanBar(ctx, rules, todo)) {
@@ -187,7 +192,7 @@ function dropForming(candles, sec, now) {
 export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES, rules = DEFAULT_RULES, cot = null, now = Date.now() / 1000, prior = null, full = false, label = '' } = {}) {
   if (c.length < WARMUP + 50) throw new Error(`Not enough ${tf.id} history`);
   const ids = include.map((x) => x.id);
-  rules = { ...rules, rrBy: { ...Object.fromEntries(include.filter((x) => x.rr).map((x) => [x.id, x.rr])), ...rules.rrBy } };
+  rules = { ...rules, rrBy: { ...Object.fromEntries(include.filter((x) => x.rr).map((x) => [x.id, x.rr])), ...rules.rrBy }, allHours: include.filter((x) => x.allHours).map((x) => x.id) };
   const opts = { rules, cot, strategies: ids, tfSec: tf.sec, htfSec: htf.sec };
   const tail = 900;
   const trades = prior ? backtest(c.slice(-tail), h.slice(-(HTF_WINDOW + Math.ceil((tail * tf.sec) / htf.sec) + 5)), opts) : backtest(c, h, opts);
@@ -198,12 +203,15 @@ export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES
   const stats = prior ? prior.stats : include.map((s) => {
     let gate = QUALITY[QUALITY.length - 1];
     let sum = null;
-    for (const g of QUALITY) {
-      const x = summarize(gated(s.id, g), s.id, splitTime);
-      if (x.active && (!sum || x.expR > sum.expR)) {
-        gate = g;
-        sum = x;
+    for (const levels of [QUALITY, QUALITY_FALLBACK]) {
+      for (const g of levels) {
+        const x = summarize(gated(s.id, g), s.id, splitTime);
+        if (x.active && (!sum || x.expR > sum.expR)) {
+          gate = g;
+          sum = x;
+        }
       }
+      if (sum) break;
     }
     sum = sum || summarize(gated(s.id, gate), s.id, splitTime);
     const all = summarize(trades, s.id, splitTime);

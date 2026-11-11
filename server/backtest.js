@@ -39,7 +39,7 @@ for (const m of MARKETS) {
     const cost = ((c.at(-1).close * m.costBps) / 10000) * costx;
     const r = analyze(c, h, { tf: { id: tf, sec: TF[tf].sec }, htf: { id: play.htf, sec: TF[play.htf].sec }, include: play.strategies, rules: { ...DEFAULT_RULES, cost, maxPerDay: tf === 'M15' ? 3 : 6 }, cot: m.id === 'gold' ? cot : null, now });
     for (const s of r.stats) {
-      console.log(`${pad(m.label, 9)}${pad(TF[tf].label, 5)}${pad(`${s.name} ${s.rr}R ${Math.round(s.gate * 8)}/8`, 24)}${pad(r.days, 6)}${pad(s.trades, 8)}${pad((s.winRate * 100).toFixed(0), 7)}${pad(num(s.pf), 7)}${pad(num(s.expR), 8)}${pad(num(s.totalR, 1), 9)}${pad(num(s.maxDD, 1), 8)}${pad(`${num(s.inSample.expR)}R`, 11)}${pad(`${num(s.outSample.expR)}R`, 10)}${s.active ? 'TRADING' : 'watch only'}`);
+      console.log(`${pad(m.label, 9)}${pad(TF[tf].label, 5)}${pad(`${s.name} ${s.rr}R ${s.gate ? `${Math.round(s.gate * 8)}/8` : 'any'}`, 24)}${pad(r.days, 6)}${pad(s.trades, 8)}${pad((s.winRate * 100).toFixed(0), 7)}${pad(num(s.pf), 7)}${pad(num(s.expR), 8)}${pad(num(s.totalR, 1), 9)}${pad(num(s.maxDD, 1), 8)}${pad(`${num(s.inSample.expR)}R`, 11)}${pad(`${num(s.outSample.expR)}R`, 10)}${s.active ? 'TRADING' : 'watch only'}`);
     }
   }
 }
