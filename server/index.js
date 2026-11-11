@@ -4,15 +4,19 @@
 // request rate however many tabs are open.
 
 import http from 'node:http';
+import { Worker } from 'node:worker_threads';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { TF, TIMEFRAMES } from '../shared/timeframes.js';
 import { getCandles } from '../shared/candles.js';
-import { runBot, BOT_TF } from '../shared/bot.js';
+import { analyze, dropFormingCandle } from '../shared/bot.js';
+import { MARKETS, PLAY_TFS } from '../shared/markets.js';
+import { DEFAULT_RULES } from '../shared/strategies.js';
+import { createNews } from './news.js';
 
 import { deltaSeries, tradeFlow, whales, bookStats } from '../shared/flow.js';
-import { createProvider, createFlowProvider } from './providers/index.js';
+import { createProviders } from './providers/index.js';
 import { createCotSource } from './cot.js';
 import { createPaper } from './paper.js';
 
@@ -53,115 +57,246 @@ function resolveStatic(urlPath) {
   return file.startsWith(root + path.sep) ? file : null;
 }
 
-export function createApp({
-  provider,
-  pollMs = provider.pollMs || 1000,
-  botHistory = 70000,
-  tvSymbol = 'OANDA:XAUUSD',
-  flowProvider = provider.fetchTrades ? provider : null,
-  cotSource = createCotSource({ demo: !!provider.demo }),
-  paper = createPaper(),
-  adminToken = '',
-}) {
-  const cache = new Map();
-  const clients = new Set();
-  let bot = null;
-  let timer = null;
-  let lastTick = null;
-  let flow = null;
-  const history = {};
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms).unref?.(); });
 
-  // The trade finder reruns once per closed 15m candle; every visitor shares the result.
-  function botResult() {
-    const bucket = Math.floor(Date.now() / 1000 / BOT_TF.sec);
-    if (bot && bot.bucket === bucket) return bot.promise;
-    const promise = cotSource.get().then((cot) => runBot({ provider, history: botHistory, cot, cache: history }));
-    bot = { bucket, promise };
-    promise.catch(() => {
-      if (bot?.promise === promise) bot = null;
+function mergeCandles(prev, fresh, n) {
+  if (!fresh.length) return prev;
+  return prev.filter((x) => x.time < fresh[0].time).concat(fresh).slice(-n);
+}
+
+function runInWorker(c, h, opts) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('./bt-worker.js', import.meta.url));
+    w.once('message', (m) => {
+      w.terminate();
+      if (m.ok) resolve(m.result);
+      else reject(new Error(m.error));
     });
-    return promise;
-  }
+    w.once('error', reject);
+    w.postMessage({ c, h, opts });
+  });
+}
+
+// providers: { gold, btc } price/candle feeds. flowProviders: the same shape for
+// order flow (taker volume, trades, book), or null per market.
+export function createApp({
+  providers,
+  flowProviders = providers,
+  pollMs = 2000,
+  historyScale = 1,
+  useWorker = true,
+  retestMs = 6 * 3600 * 1000,
+  cotSource = createCotSource({ demo: !!providers.gold.demo }),
+  paper = createPaper(),
+  news = createNews({ demo: !!providers.gold.demo }),
+  newsPause = false,
+  adminToken = '',
+  autoStart = true,
+}) {
+  const clients = new Set();
+  const candleCache = new Map();
+  const flowCache = new Map();
+  const prices = {};
+  let closed = false;
+  let cot = null;
+
+  const markets = MARKETS.map((m) => ({
+    m,
+    provider: providers[m.id],
+    flow: flowProviders?.[m.id] || null,
+    hist: {}, // tf id -> closed + forming candles
+    plays: Object.fromEntries(PLAY_TFS.filter((tf) => m.plays[tf]).map((tf) => [tf, { full: null, live: null, error: null, testing: false, testedAt: 0, lastBar: 0 }])),
+    ready: false,
+    lastRefresh: 0,
+  }));
+  const byId = Object.fromEntries(markets.map((x) => [x.m.id, x]));
+  const need = (x, tf) => Math.max(1500, Math.round(x.m.plays[tf].history * historyScale));
 
   function broadcast(msg) {
     const line = `data: ${JSON.stringify(msg)}\n\n`;
     for (const res of clients) res.write(line);
   }
 
-  // Prices are polled while someone is watching, or while the auto-trader runs.
-  async function poll() {
+  function playOpts(x, tf, extra = {}) {
+    const play = x.m.plays[tf];
+    const price = prices[x.m.id] ?? x.hist[tf]?.at(-1)?.close ?? 0;
+    return {
+      tf: { id: tf, sec: TF[tf].sec },
+      htf: { id: play.htf, sec: TF[play.htf].sec },
+      include: play.strategies,
+      rules: { ...DEFAULT_RULES, cost: (price * x.m.costBps) / 10000, maxPerDay: tf === 'M15' ? 3 : 6 },
+      cot: x.m.id === 'gold' ? cot : null,
+      label: x.provider.label,
+      ...extra,
+    };
+  }
+
+  const closedOf = (x, tf) => dropFormingCandle(x.hist[tf] || [], TF[tf].sec, Date.now() / 1000);
+
+  async function fullTest(x, tf) {
+    const st = x.plays[tf];
+    if (st.testing) return;
+    st.testing = true;
     try {
-      const p = await provider.fetchPrice();
-      if (Number.isFinite(p)) {
-        lastTick = { t: Math.floor(Date.now() / 1000), p };
-        broadcast(lastTick);
-        paper.onPrice(p);
-      }
+      const play = x.m.plays[tf];
+      const c = closedOf(x, tf);
+      const h = closedOf(x, play.htf);
+      const opts = playOpts(x, tf, { now: Date.now() / 1000 });
+      st.full = useWorker ? await runInWorker(c, h, opts) : analyze(c, h, opts);
+      st.live = null;
+      st.error = null;
+      st.testedAt = Date.now();
     } catch (e) {
-      broadcast({ error: e.message });
+      st.error = e.message;
+    } finally {
+      st.testing = false;
     }
-    timer = clients.size || paper.enabled ? setTimeout(poll, pollMs) : null;
   }
-  const ensurePolling = () => {
-    if (!timer) timer = setTimeout(poll, 0);
-  };
 
-  // Auto-trader loop: hand fresh setups to the paper account every 30 s.
-  async function autoTrade() {
-    if (!paper.enabled) return;
-    ensurePolling();
+  // Cheap scan of the latest candles for live setups, reusing the last full test's statistics.
+  function liveScan(x, tf) {
+    const st = x.plays[tf];
+    if (!st.full) return;
+    const play = x.m.plays[tf];
+    const c = closedOf(x, tf);
+    const last = c.at(-1)?.time || 0;
+    if (last === st.lastBar) return;
+    st.lastBar = last;
     try {
-      const r = await botResult();
-      const price = lastTick?.p ?? (await provider.fetchPrice());
-      paper.onSignals(r.signals, price);
-    } catch { /* retried on the next pass */ }
+      st.live = analyze(c, closedOf(x, play.htf), playOpts(x, tf, { now: Date.now() / 1000, prior: st.full }));
+      const pause = newsPause ? news.pauseReason() : null;
+      paper.onSignals(st.live.signals, prices[x.m.id], { id: x.m.id, label: x.m.label, costBps: x.m.costBps, step: x.m.id === 'btc' ? 0.0001 : 0.01 }, { pause });
+    } catch (e) {
+      st.error = e.message;
+    }
   }
-  const autoTimer = setInterval(autoTrade, 30000);
-  autoTimer.unref?.();
-  if (paper.enabled) setTimeout(autoTrade, 0).unref?.();
 
-  async function candles(tfId, limit) {
-    const key = `${tfId}:${limit}`;
-    const hit = cache.get(key);
+  async function loadMarket(x) {
+    const tfs = new Set();
+    for (const tf of Object.keys(x.plays)) {
+      tfs.add(tf);
+      tfs.add(x.m.plays[tf].htf);
+    }
+    for (const tf of tfs) {
+      const n = x.plays[tf] ? need(x, tf) : 0;
+      const asHtf = Math.max(0, ...Object.keys(x.plays).filter((p) => x.m.plays[p].htf === tf).map((p) => Math.ceil((need(x, p) * TF[p].sec) / TF[tf].sec) + 320));
+      const want = Math.max(n, asHtf);
+      x.hist[tf] = await getCandles(x.provider, tf, want, { maxCandles: want + 100 });
+      x.want = { ...x.want, [tf]: want };
+      if (closed) return;
+    }
+    x.ready = true;
+    // Shortest history first, so the 15m results appear quickly.
+    for (const tf of ['M15', 'M5', 'M1'].filter((t) => x.plays[t])) {
+      if (closed) return;
+      await fullTest(x, tf);
+      liveScan(x, tf);
+    }
+  }
+
+  async function refreshCandles(x) {
+    const now = Date.now() / 1000;
+    for (const tf of Object.keys(x.hist)) {
+      const prev = x.hist[tf];
+      const last = prev.at(-1)?.time ?? 0;
+      const sec = TF[tf].sec;
+      if (now < last + sec + 1) continue; // the forming candle has not closed yet
+      const missing = Math.ceil((now - last) / sec) + 3;
+      const fresh = await getCandles(x.provider, tf, Math.min(1000, Math.max(5, missing)));
+      x.hist[tf] = mergeCandles(prev, fresh, x.want[tf]);
+    }
+    for (const tf of Object.keys(x.plays)) {
+      liveScan(x, tf);
+      if (Date.now() - x.plays[tf].testedAt > retestMs && !x.plays[tf].testing) fullTest(x, tf).then(() => liveScan(x, tf));
+    }
+  }
+
+  async function loop(x) {
+    while (!closed) {
+      try {
+        const p = await x.provider.fetchPrice();
+        if (Number.isFinite(p)) {
+          prices[x.m.id] = p;
+          broadcast({ m: x.m.id, t: Math.floor(Date.now() / 1000), p });
+          paper.onPrice(p, x.m.id, prices);
+        }
+        if (x.ready && Date.now() - x.lastRefresh > 5000) {
+          x.lastRefresh = Date.now();
+          await refreshCandles(x);
+        }
+      } catch (e) {
+        broadcast({ m: x.m.id, error: e.message });
+      }
+      await sleep(x.provider.pollMs && x.provider.pollMs > pollMs ? x.provider.pollMs : pollMs);
+    }
+  }
+
+  async function boot() {
+    cot = await cotSource.get().catch(() => null);
+    news.start();
+    for (const x of markets) loop(x);
+    for (const x of markets) {
+      // A failed history load is retried every minute.
+      (async () => {
+        while (!closed && !x.ready) {
+          await loadMarket(x).catch((e) => { for (const st of Object.values(x.plays)) st.error = e.message; });
+          if (!x.ready) await sleep(60000);
+        }
+      })();
+    }
+  }
+  const ready = autoStart ? boot() : Promise.resolve();
+
+  function botView(x) {
+    const tfs = {};
+    for (const [tf, st] of Object.entries(x.plays)) {
+      const r = st.live || st.full;
+      tfs[tf] = r ? { ...r, testing: st.testing } : { pending: true, error: st.error, strategies: x.m.plays[tf].strategies.map((s) => s.id) };
+    }
+    return { market: x.m.id, price: prices[x.m.id] ?? null, tfs };
+  }
+
+  async function candles(x, tfId, limit) {
+    const key = `${x.m.id}:${tfId}:${limit}`;
+    const hit = candleCache.get(key);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise;
-    const promise = getCandles(provider, tfId, limit);
-    cache.set(key, { at: Date.now(), promise });
-    promise.catch(() => cache.delete(key));
+    // Serve the play timeframes from memory when the history is loaded.
+    const promise = x.ready && x.hist[tfId] && x.hist[tfId].length >= limit && Date.now() / 1000 - x.hist[tfId].at(-1).time < TF[tfId].sec + 15
+      ? Promise.resolve(x.hist[tfId].slice(-limit))
+      : getCandles(x.provider, tfId, limit);
+    candleCache.set(key, { at: Date.now(), promise });
+    promise.catch(() => candleCache.delete(key));
     return promise;
   }
 
-  // Order flow from the flow provider (Binance PAXG unless the main feed has its own).
-  // When the flow market trades at a small premium to the main feed, its prices are
-  // shifted by that basis so walls and big trades line up with the chart.
-  async function orderFlow(tfId) {
-    if (!flowProvider) return { available: false };
-    if (flow && flow.tf === tfId && Date.now() - flow.at < CACHE_MS) return flow.promise;
+  // Order flow: taker delta per candle, recent tape, whales and the order book.
+  // When the flow market trades at a small premium to the price feed, its
+  // prices are shifted by that basis so walls and big trades line up with the chart.
+  async function orderFlow(x, tfId) {
+    if (!x.flow) return { available: false };
+    const key = `${x.m.id}:${tfId}`;
+    const hit = flowCache.get(key);
+    if (hit && Date.now() - hit.at < 2000) return hit.promise;
     const promise = (async () => {
-      const [fc, trades, book, mainPrice] = await Promise.all([
-        getCandles(flowProvider, tfId, 120),
-        flowProvider.fetchTrades(1000),
-        flowProvider.fetchBook(500),
-        flowProvider === provider ? null : (lastTick?.p ?? provider.fetchPrice()),
-      ]);
+      const [fc, trades, book] = await Promise.all([getCandles(x.flow, tfId, 120), x.flow.fetchTrades(1000), x.flow.fetchBook(500)]);
       const flowPrice = trades.length ? trades[trades.length - 1].price : fc[fc.length - 1]?.close;
-      const basis = mainPrice != null && Number.isFinite(flowPrice) ? mainPrice - flowPrice : 0;
+      const main = prices[x.m.id];
+      const basis = x.flow !== x.provider && main != null && Number.isFinite(flowPrice) ? main - flowPrice : 0;
       const shift = (l) => ({ ...l, price: l.price + basis });
-      const shifted = { bids: book.bids.map(shift), asks: book.asks.map(shift) };
-      const tradesShifted = trades.map(shift);
+      const shifted = trades.map(shift);
       return {
         available: true,
-        source: flowProvider.label,
+        source: x.flow.label,
+        symbol: x.flow.symbol || null,
         basis,
         delta: deltaSeries(fc),
-        tape: tradeFlow(tradesShifted),
-        whales: whales(tradesShifted),
-        book: bookStats(shifted),
+        tape: tradeFlow(shifted),
+        whales: whales(shifted),
+        book: bookStats({ bids: book.bids.map(shift), asks: book.asks.map(shift) }, { bucket: x.m.id === 'btc' ? 25 : 1 }),
       };
     })();
-    flow = { tf: tfId, at: Date.now(), promise };
-    promise.catch(() => {
-      if (flow?.promise === promise) flow = null;
-    });
+    flowCache.set(key, { at: Date.now(), promise });
+    promise.catch(() => flowCache.delete(key));
     return promise;
   }
 
@@ -183,68 +318,68 @@ export function createApp({
   }
 
   async function paperAction(req) {
-    if (adminToken && req.headers['x-admin-token'] !== adminToken) {
-      throw Object.assign(new Error('Admin token required'), { status: 401 });
-    }
+    if (adminToken && req.headers['x-admin-token'] !== adminToken) throw Object.assign(new Error('Admin token required'), { status: 401 });
     const b = await readJson(req);
-    const price = lastTick?.p ?? (await provider.fetchPrice().catch(() => NaN));
     if (b.config) paper.configure(b.config);
-    if (b.action === 'start') {
-      paper.start();
-      autoTrade();
-    } else if (b.action === 'stop') paper.stop({ closeAll: !!b.closeAll, price });
+    if (b.action === 'start') paper.start();
+    else if (b.action === 'stop') paper.stop({ closeAll: !!b.closeAll, prices });
     else if (b.action === 'reset') paper.reset(b.amount != null ? +b.amount : undefined);
-    return paper.snapshot(price);
+    return paper.snapshot(prices);
   }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    const q = url.searchParams;
+    const market = () => {
+      const x = byId[q.get('market') || 'gold'];
+      if (!x) throw Object.assign(new Error(`Unknown market ${q.get('market')}`), { status: 400 });
+      return x;
+    };
     try {
       if (url.pathname === '/api/config') {
         return send(res, 200, {
-          provider: provider.name,
-          label: provider.label,
-          note: provider.note,
-          demo: !!provider.demo,
-          tvSymbol,
-          flow: flowProvider ? flowProvider.label : null,
-          cot: cotSource.label,
+          demo: !!providers.gold.demo,
           adminToken: !!adminToken,
-          timeframes: TIMEFRAMES.map((t) => t.id),
+          tfs: PLAY_TFS,
+          markets: markets.map((x) => ({
+            id: x.m.id, label: x.m.label, pair: x.m.pair, tv: x.m.tv, unit: x.m.unit, lot: x.m.lot,
+            source: x.provider.label, flow: x.flow ? x.flow.label : null,
+            // Binance symbol for the browser's live trade stream, when the flow feed is Binance.
+            stream: x.flow && x.flow.name === 'binance' ? x.flow.symbol : null,
+          })),
         });
       }
       if (url.pathname === '/api/candles') {
-        const tf = url.searchParams.get('tf') || 'M15';
-        const limit = Math.max(10, Math.min(MAX_LIMIT, parseInt(url.searchParams.get('limit'), 10) || 500));
-        return send(res, 200, { tf, candles: await candles(tf, limit) });
-      }
-      if (url.pathname === '/api/bot') {
-        return send(res, 200, await botResult());
-      }
-      if (url.pathname === '/api/flow') {
-        const tf = url.searchParams.get('tf') || 'M15';
+        const tf = q.get('tf') || 'M5';
         if (!TF[tf]) return send(res, 400, { error: `Unknown timeframe ${tf}` });
-        return send(res, 200, await orderFlow(tf));
+        const limit = Math.max(10, Math.min(MAX_LIMIT, parseInt(q.get('limit'), 10) || 500));
+        return send(res, 200, { tf, candles: await candles(market(), tf, limit) });
       }
+      if (url.pathname === '/api/bot') return send(res, 200, botView(market()));
+      if (url.pathname === '/api/flow') {
+        const tf = q.get('tf') || 'M5';
+        if (!TF[tf]) return send(res, 400, { error: `Unknown timeframe ${tf}` });
+        return send(res, 200, await orderFlow(market(), tf));
+      }
+      if (url.pathname === '/api/news') return send(res, 200, news.list());
       if (url.pathname === '/api/cot') {
-        const m = await cotSource.get();
+        const m = cot || (await cotSource.get());
         return send(res, 200, m ? { available: true, source: cotSource.label, latest: m[m.length - 1], series: m.slice(-156) } : { available: false, source: cotSource.label });
       }
       if (url.pathname === '/api/paper') {
         if (req.method === 'POST') return send(res, 200, await paperAction(req));
-        return send(res, 200, paper.snapshot(lastTick?.p));
+        return send(res, 200, paper.snapshot(prices));
       }
       if (url.pathname === '/api/stream') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
         res.write('retry: 3000\n\n');
-        if (lastTick) res.write(`data: ${JSON.stringify(lastTick)}\n\n`);
+        for (const [m, p] of Object.entries(prices)) res.write(`data: ${JSON.stringify({ m, t: Math.floor(Date.now() / 1000), p })}\n\n`);
         clients.add(res);
         const ping = setInterval(() => res.write(': ping\n\n'), 15000);
         req.on('close', () => {
           clearInterval(ping);
           clients.delete(res);
         });
-        ensurePolling();
         return undefined;
       }
       if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed' });
@@ -256,9 +391,10 @@ export function createApp({
   });
 
   server.on('close', () => {
-    clearTimeout(timer);
-    clearInterval(autoTimer);
+    closed = true;
+    news.stop();
   });
+  server.ready = ready;
   return server;
 }
 
@@ -266,16 +402,20 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const envFile = path.join(ROOT, '.env');
   if (fs.existsSync(envFile)) process.loadEnvFile(envFile);
   if (process.argv.includes('--demo')) process.env.PROVIDER = 'demo';
-  const provider = createProvider(process.env);
+  const { providers, flowProviders } = createProviders(process.env);
   const port = +process.env.PORT || 3000;
-  const pollMs = +process.env.POLL_MS || undefined;
-  const botHistory = +process.env.BOT_HISTORY || undefined;
-  const tvSymbol = process.env.TV_SYMBOL || undefined;
-  const flowProvider = createFlowProvider(process.env, provider);
   const paper = createPaper({ file: path.resolve(ROOT, process.env.DATA_DIR || 'data', 'paper.json') });
   const adminToken = process.env.ADMIN_TOKEN || '';
-  createApp({ provider, pollMs, botHistory, tvSymbol, flowProvider, paper, adminToken }).listen(port, () => {
-    console.log(`Aurum Pulse running at http://localhost:${port}  (prices: ${provider.label}, order flow: ${flowProvider ? flowProvider.label : 'off'})`);
-    if (!adminToken) console.log('Tip: set ADMIN_TOKEN so only you can start or change the auto-trader when this is online.');
+  createApp({
+    providers,
+    flowProviders,
+    pollMs: +process.env.POLL_MS || undefined,
+    historyScale: +process.env.HISTORY_SCALE || undefined,
+    newsPause: process.env.NEWS_PAUSE === '1',
+    paper,
+    adminToken,
+  }).listen(port, () => {
+    console.log(`Pulse Scalper running at http://localhost:${port}  (gold: ${providers.gold.label}, btc: ${providers.btc.label})`);
+    if (!adminToken) console.log('Tip: set ADMIN_TOKEN so only you can change the auto-trader when this is online.');
   });
 }

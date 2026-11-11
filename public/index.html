@@ -3,51 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Aurum Pulse · Gold Terminal</title>
+  <title>Pulse Scalper · Gold &amp; Bitcoin terminal</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
-  <div class="gridlines" aria-hidden="true"></div>
 
   <header class="top">
-    <div class="brand">
-      <div class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M4 22 L11 13 L16 18 L22 8 L28 14" /></svg></div>
-      <div><div class="name">Aurum <b>Pulse</b></div><div class="sub">XAU/USD intelligence terminal</div></div>
+    <div class="brand">Pulse <b>Scalper</b></div>
+    <div class="mtabs" id="mtabs" role="group" aria-label="Market"></div>
+    <div class="quote"><span id="price" class="price">—</span><span id="change" class="chg"></span><span id="liveDot" class="live-dot" title="Connecting"></span></div>
+    <div class="seg" id="tfs" role="group" aria-label="Timeframe"></div>
+    <div class="seg" id="views" role="group" aria-label="Chart">
+      <button type="button" data-view="pulse">Pulse</button>
+      <button type="button" data-view="tv" title="TradingView's own chart and drawing tools">TradingView</button>
     </div>
-
-    <div class="ticker">
-      <div class="sym">XAU/USD <span id="liveDot" class="live-dot" title="Connecting"></span></div>
-      <div id="price" class="price">—</div>
-      <div id="change" class="chg">—</div>
-    </div>
-
-    <div id="sessions" class="sessions" aria-label="Trading sessions"></div>
-
-    <div class="feeds">
-      <span id="srcPrice" class="pill">—</span>
-      <span id="srcFlow" class="pill ghost">—</span>
-    </div>
+    <div class="pills" id="pills"></div>
   </header>
-
   <div id="banner" class="banner" hidden></div>
 
   <main class="layout">
-    <!-- Chart -->
     <section class="card chart-card" style="--i:0">
-      <div class="card-head">
-        <div class="views" id="views" role="group" aria-label="Chart">
-          <button type="button" data-view="pulse" title="Aurum Pulse chart with zones, liquidity, walls and setups">Pulse</button>
-          <button type="button" data-view="tv" title="TradingView's own chart, prices and drawing tools">TradingView</button>
-        </div>
-        <div class="tfs" id="tfs" role="group" aria-label="Timeframe"></div>
-        <div class="bias" id="bias"></div>
-        <div class="layers" id="layers" role="group" aria-label="Chart layers"></div>
-      </div>
+      <div class="chart-head"><div class="bias" id="bias"></div><div class="layers" id="layers" role="group" aria-label="Chart layers"></div></div>
       <div class="chart-wrap">
         <div id="chart"></div>
         <canvas id="overlay"></canvas>
@@ -56,90 +37,47 @@
       </div>
     </section>
 
-    <!-- Best setup -->
-    <section class="card hero" style="--i:1" aria-live="polite">
-      <div class="card-head"><h2><span class="ico">◎</span>Best setup</h2><span id="heroMeta" class="meta"></span></div>
-      <div id="hero" class="hero-body"></div>
+    <section class="card setup" style="--i:1" aria-live="polite">
+      <h2>Setup <span id="heroMeta" class="meta"></span></h2>
+      <div id="hero" class="hero"></div>
     </section>
 
-    <!-- Auto-trader -->
     <section class="card bot" style="--i:2">
-      <div class="card-head"><h2><span class="ico">⚡</span>Auto-trader</h2><span id="botState" class="state">—</span></div>
-      <div class="equity">
-        <div><div class="lbl">Equity</div><div id="equity" class="big">—</div></div>
-        <div class="right"><div id="pnl" class="pnl">—</div><div id="pnlPct" class="muted small">—</div></div>
-      </div>
+      <h2>Auto-trader · paper <span id="botState" class="state">—</span></h2>
+      <div class="equity"><div id="equity" class="big mono">—</div><div class="right"><div id="pnl" class="mono pnl">—</div><div id="pnlPct" class="muted small"></div></div></div>
       <div id="equitySpark" class="spark-wrap"></div>
-      <form id="botForm" class="bot-form" autocomplete="off">
-        <label>Amount to trade ($)<input name="startBalance" type="number" min="100" step="100" inputmode="decimal"></label>
-        <label>Risk per trade <output id="riskOut">1%</output><input name="riskPct" type="range" min="0.25" max="3" step="0.25"></label>
-        <label class="wide">Accuracy mode
-          <select name="minGrade">
-            <option value="C">Every signal from proven strategies (recommended)</option>
-            <option value="B">Stricter · grades A and B only</option>
-            <option value="A">Strictest · grade A only</option>
-          </select>
-        </label>
-        <label>Max open trades<input name="maxOpen" type="number" min="1" max="5" step="1"></label>
-        <label>Daily loss limit (%)<input name="dailyLossPct" type="number" min="0.5" max="20" step="0.5"></label>
-        <div class="bot-actions wide">
-          <button type="button" id="botToggle" class="btn primary">Start auto-trading</button>
-          <button type="button" id="botReset" class="btn ghost" title="Start again with the amount above">Reset</button>
-          <button type="button" id="botClose" class="btn ghost danger" title="Stop and close every open trade at the current price">Stop &amp; close all</button>
-        </div>
-      </form>
-      <p class="muted small" id="botNote">Paper mode: simulated fills, no real money. Live broker execution plugs into the same engine later.</p>
-      <div class="sub-head">Open trades</div>
-      <ul id="positions" class="positions"></ul>
-      <div class="sub-head">Activity</div>
+      <div class="kpis" id="kpis"></div>
+      <ul id="positions" class="list"></ul>
+      <details class="settings">
+        <summary>Settings &amp; controls</summary>
+        <form id="botForm" class="bot-form" autocomplete="off">
+          <label>Paper balance ($)<input name="startBalance" type="number" min="100" step="100" inputmode="decimal"></label>
+          <label>Risk per trade <output id="riskOut"></output><input name="riskPct" type="range" min="0.25" max="3" step="0.25"></label>
+          <label>Max open per market<input name="maxOpen" type="number" min="1" max="5" step="1"></label>
+          <label>Daily loss limit (%)<input name="dailyLossPct" type="number" min="0.5" max="20" step="0.5"></label>
+          <div class="actions">
+            <button type="button" id="botToggle" class="btn primary">Start</button>
+            <button type="button" id="botReset" class="btn">Reset</button>
+            <button type="button" id="botClose" class="btn danger">Stop &amp; close all</button>
+          </div>
+        </form>
+      </details>
       <ol id="botLog" class="log"></ol>
     </section>
 
-    <!-- Smart money -->
-    <section class="card" style="--i:3">
-      <div class="card-head"><h2><span class="ico">◆</span>Big players</h2><span id="cotMeta" class="meta"></span></div>
-      <div id="cot" class="cot"></div>
-    </section>
+    <section class="card" style="--i:3"><h2>Order flow <span id="flowMeta" class="meta"></span></h2><div id="flow" class="stack"></div></section>
+    <section class="card" style="--i:4"><h2>Whale tape <span id="whaleMeta" class="meta"></span></h2><div id="whaleSum"></div><ol id="whales" class="list whales"></ol></section>
+    <section class="card" style="--i:5"><h2>Liquidity <span id="liqMeta" class="meta"></span></h2><div id="liq" class="stack"></div></section>
+    <section class="card" style="--i:6"><h2>News <span id="newsMeta" class="meta"></span></h2><div id="events" class="events"></div><ol id="news" class="list news"></ol></section>
 
-    <!-- Order flow -->
-    <section class="card" style="--i:4">
-      <div class="card-head"><h2><span class="ico">⇅</span>Order flow</h2><span id="flowMeta" class="meta"></span></div>
-      <div id="flow" class="flow"></div>
-    </section>
-
-    <!-- Liquidity -->
-    <section class="card" style="--i:5">
-      <div class="card-head"><h2><span class="ico">≋</span>Liquidity map</h2><span id="liqMeta" class="meta"></span></div>
-      <div id="liq" class="liq"></div>
-    </section>
-
-    <!-- Whales -->
-    <section class="card" style="--i:6">
-      <div class="card-head"><h2><span class="ico">◉</span>Whale tape</h2><span id="whaleMeta" class="meta"></span></div>
-      <div id="whaleSummary" class="whale-sum"></div>
-      <ol id="whales" class="whales"></ol>
-    </section>
-
-    <!-- Accuracy -->
-    <section class="card" style="--i:7">
-      <div class="card-head"><h2><span class="ico">✓</span>Measured accuracy</h2><span id="accMeta" class="meta"></span></div>
-      <div id="grades" class="grades"></div>
-      <div class="sub-head">Strategies</div>
-      <div id="strategies" class="strategies"></div>
-    </section>
-
-    <!-- Recent setups -->
-    <section class="card wide-card" style="--i:8">
-      <div class="card-head"><h2><span class="ico">↻</span>Recent setups</h2><span class="meta">backtest results</span></div>
-      <ol id="recent" class="recent"></ol>
-    </section>
+    <section class="card wide" style="--i:7"><h2>Strategy scoreboard <span id="scoreMeta" class="meta"></span></h2><div id="score" class="score"></div></section>
+    <section class="card wide" style="--i:8"><h2>Trade history <span class="meta">paper account</span></h2><ol id="history" class="history"></ol></section>
   </main>
 
   <footer class="foot">
-    Aurum Pulse is an analysis tool, not financial advice. Accuracy figures are measured on recent history and do not guarantee future results.
-    Order flow comes from a gold-token market as a proxy for spot gold. Trading leveraged gold products can lose more than you invest.
+    Analysis tool, not financial advice. The auto-trader uses simulated money. Strategy results are measured on past data and do not guarantee future results.
+    Gold prices and order flow come from the PAXG gold-token market unless another feed is configured. Leveraged trading can lose more than you invest.
   </footer>
-
   <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <script src="/vendor/lightweight-charts.js"></script>

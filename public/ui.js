@@ -54,7 +54,7 @@ export function ring(score, { size = 132, stroke = 10, label = 'confluence' } = 
   const c = 2 * Math.PI * r;
   const off = c * (1 - Math.max(0, Math.min(100, score)) / 100);
   return `<svg class="ring" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Confluence ${score} of 100">
-    <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--gold)"/><stop offset="1" stop-color="var(--bull)"/></linearGradient></defs>
+    <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--accent)"/><stop offset="1" stop-color="var(--bull)"/></linearGradient></defs>
     <circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="ring-track" stroke-width="${stroke}"/>
     <circle cx="${size / 2}" cy="${size / 2}" r="${r}" class="ring-arc" stroke-width="${stroke}" stroke-dasharray="${c}" stroke-dashoffset="${c}" data-off="${off}" transform="rotate(-90 ${size / 2} ${size / 2})"/>
     <text x="50%" y="48%" class="ring-num">${score}</text><text x="50%" y="66%" class="ring-lbl">${label}</text></svg>`;

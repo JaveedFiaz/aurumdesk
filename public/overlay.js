@@ -5,17 +5,17 @@
 import { volumeProfile } from '/shared/analysis.js';
 
 export const COLORS = {
-  demand: [34, 211, 238],
-  supply: [167, 139, 250],
-  bullOB: [34, 227, 161],
-  bearOB: [255, 77, 109],
-  bull: '#22e3a1',
-  bear: '#ff4d6d',
-  sr: '#8a94a8',
-  liq: '#f5c451',
-  pd: '#ffe08a',
-  poc: '#f5c451',
-  text: '#e8ecf4',
+  demand: [52, 245, 197],
+  supply: [255, 95, 162],
+  bullOB: [52, 245, 197],
+  bearOB: [255, 95, 162],
+  bull: '#34f5c5',
+  bear: '#ff5fa2',
+  sr: '#c3bde0',
+  liq: '#c4b5fd',
+  pd: '#e9e3ff',
+  poc: '#c4b5fd',
+  text: '#f4f1ff',
 };
 
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
@@ -65,7 +65,7 @@ export class Overlay {
     const y0 = this.series.priceToCoordinate(1000);
     const y1 = this.series.priceToCoordinate(2000);
     const sig = [this.version, w, h, range && range.from.toFixed(2), range && range.to.toFixed(2), y0, y1].join('|');
-    if (sig === this.sig) return;
+    if (sig === this.sig && performance.now() - (this.animStart || 0) > 1000) return;
     this.sig = sig;
 
     const dpr = window.devicePixelRatio || 1;
@@ -170,8 +170,8 @@ export class Overlay {
       const i = lowerBound(candles, time + 1) - 1;
       return i < 0 ? null : i;
     };
-    const green = (a) => `rgba(34,227,161,${a})`;
-    const red = (a) => `rgba(255,77,109,${a})`;
+    const green = (a) => `rgba(52,245,197,${a})`;
+    const red = (a) => `rgba(255,95,162,${a})`;
     const lastX = X(candles.length - 1);
 
     for (const p of t.history || []) {
@@ -205,16 +205,43 @@ export class Overlay {
       this.tag(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} · high-volume breakout`, right - 6, Y(g.price) + (bull ? -9 : 9), bull ? COLORS.bull : COLORS.bear, 'right', true);
     }
 
+    // Live setups: a position box that grows out from the entry candle. For a
+    // sell the red (stop) half is above and the green (target) half below.
+    const key = (t.live || []).map((s) => `${s.strategy}:${s.signalTime}`).join('|');
+    if (key !== this.liveKey) {
+      this.liveKey = key;
+      if (key) this.animStart = performance.now();
+    }
+    const k = Math.min(1, (performance.now() - (this.animStart || 0)) / 900);
+    const ease = 1 - (1 - k) ** 3;
     for (const s of t.live || []) {
       const bull = s.dir === 'bull';
       const i = s.entryTime ? idx(s.entryTime) : candles.length - 1;
       const x1 = (i == null ? null : X(i)) ?? lastX;
       if (x1 == null) continue;
-      this.box(x1, right, Y(s.entry), Y(s.target), green(0.22), green(0.9));
-      this.box(x1, right, Y(s.entry), Y(s.stop), red(0.22), red(0.9));
-      this.hline(x1, right, Y(s.entry), '#f5c451', [], 2);
-      // Entry, stop and target prices are on the price axis; one label names the signal.
-      this.tag(`${bull ? '▲ BUY' : '▼ SELL'} SIGNAL · ${s.status === 'open' ? 'running' : 'new'}`, x1 - 6, Y(s.entry), '#ffe08a', 'right', true);
+      const x2 = x1 + (right - x1) * ease;
+      this.box(x1, x2, Y(s.entry), Y(s.target), green(0.22), green(0.95));
+      this.box(x1, x2, Y(s.entry), Y(s.stop), red(0.24), red(0.95));
+      this.hline(x1, x2, Y(s.entry), '#e9e3ff', [], 2);
+      if (ease < 1) continue;
+      this.tag(`${bull ? '▲ BUY' : '▼ SELL'} ${s.entry.toFixed(2)} · ${s.status === 'open' ? 'running' : 'new'}`, x1 - 6, Y(s.entry), '#e9e3ff', 'right', true);
+      this.tag(`TP ${s.target.toFixed(2)} · ${(s.rr || 2).toFixed(1)}R`, right - 6, Y(s.target) + (bull ? 9 : -9), COLORS.bull, 'right', true);
+      this.tag(`SL ${s.stop.toFixed(2)}`, right - 6, Y(s.stop) + (bull ? -9 : 9), COLORS.bear, 'right', true);
+      if (s.trap && s.level) {
+        const si = idx(s.signalTime);
+        const sx = si == null ? x1 : X(si);
+        this.hline(Math.max(0, (sx ?? x1) - 90), x1, Y(s.level), '#c4b5fd', [3, 3], 1);
+        this.tag(bull ? 'TRAP BREAKDOWN · failed' : 'TRAP BREAKOUT · failed', x1 - 8, Y(s.level) + (bull ? 12 : -12), '#c4b5fd', 'right', true);
+      }
+    }
+
+    // Volume surges: candles with at least twice the average volume where one side dominated.
+    for (const v of t.surges || []) {
+      const x = X(v.index);
+      if (x == null || x < 0 || x > right) continue;
+      const buy = v.side === 'buy';
+      const y = buy ? Y(candles[v.index].low) + 14 : Y(candles[v.index].high) - 14;
+      this.tag(`${buy ? 'BUYERS' : 'SELLERS'} ${v.mult.toFixed(1)}×`, x, y, buy ? COLORS.bull : COLORS.bear, 'center', true);
     }
   }
 
@@ -283,7 +310,7 @@ export class Overlay {
     ctx.font = `${bold ? '600 ' : ''}11px system-ui, sans-serif`;
     const tw = ctx.measureText(text).width;
     const left = align === 'right' ? x - tw : align === 'center' ? x - tw / 2 : x;
-    ctx.fillStyle = 'rgba(5,7,13,0.82)';
+    ctx.fillStyle = 'rgba(11,7,32,0.85)';
     ctx.fillRect(left - 3, y - 7, tw + 6, 14);
     ctx.fillStyle = color;
     ctx.fillText(text, left, y + 0.5);

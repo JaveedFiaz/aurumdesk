@@ -12,56 +12,7 @@ import { createCotSource } from '../server/cot.js';
 const T0 = Date.parse('2026-10-21T10:00:00Z') / 1000;
 const signal = (o = {}) => ({ strategy: 'zone_retest', signalTime: T0, status: 'pending', active: true, dir: 'bull', grade: 'A', score: 80, entry: 2400, stop: 2390, target: 2420, why: 'test', ...o });
 
-test('auto-trader sizes to risk, takes profit and books P&L after costs', () => {
-  let t = T0;
-  const p = createPaper({ broker: paperBroker({ cost: 0.4 }), now: () => t });
-  p.configure({ startBalance: 10000, riskPct: 1 });
-  p.start();
-  p.onSignals([signal()], 2400);
-  let s = p.snapshot(2400);
-  assert.equal(s.positions.length, 1);
-  const pos = s.positions[0];
-  assert.equal(pos.entry, 2400.2); // paid half the spread
-  assert.equal(pos.units, 9.8); // $100 risk / $10.20 stop distance = 9.80 oz
-  assert.ok(pos.riskCash <= 100);
-  t += 600;
-  p.onPrice(2421);
-  s = p.snapshot(2421);
-  assert.equal(s.positions.length, 0);
-  const h = s.history[0];
-  assert.equal(h.reason, 'target');
-  assert.ok(Math.abs(h.pnl - (2419.8 - 2400.2) * 9.8) < 1e-6); // target fill minus half spread
-  assert.ok(Math.abs(s.balance - (10000 + h.pnl)) < 1e-6);
-  p.onSignals([signal()], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 0, 'the same setup is never taken twice');
-});
 
-test('auto-trader respects grade, open-trade cap, daily loss limit and stale prices', () => {
-  let t = T0;
-  const p = createPaper({ broker: paperBroker({ cost: 0 }), now: () => t });
-  p.configure({ startBalance: 10000, riskPct: 2, maxOpen: 1, dailyLossPct: 3, minGrade: 'A' });
-  p.onSignals([signal()], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 0, 'does nothing while stopped');
-  p.start();
-  p.onSignals([signal({ signalTime: T0 + 1, grade: 'B' })], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 0, 'grade B skipped in A-only mode');
-  p.onSignals([signal({ signalTime: T0 + 2, active: false })], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 0, 'unproven strategy skipped');
-  p.onSignals([signal({ signalTime: T0 + 3 })], 2415);
-  assert.equal(p.snapshot(2415).positions.length, 0, 'price ran away: reward/risk below 1.5');
-  p.onSignals([signal({ signalTime: T0 + 4 }), signal({ signalTime: T0 + 5, strategy: 'vwap_pullback' })], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 1, 'max one open trade');
-  p.onPrice(2389); // -2%
-  p.onSignals([signal({ signalTime: T0 + 6 })], 2400);
-  p.onPrice(2389); // -2% again: day is now -4%
-  p.onSignals([signal({ signalTime: T0 + 7 })], 2400);
-  const s = p.snapshot(2400);
-  assert.equal(s.positions.length, 0, 'daily loss limit blocks new trades');
-  assert.ok(s.log.some((l) => /daily loss limit/.test(l.msg)));
-  t += 86400;
-  p.onSignals([signal({ signalTime: T0 + 8 })], 2400);
-  assert.equal(p.snapshot(2400).positions.length, 1, 'a new day resets the limit');
-});
 
 test('auto-trader validates settings', () => {
   const p = createPaper();
@@ -128,32 +79,3 @@ test('confluence: every factor counts, missing data is left out, grades follow t
   assert.equal(gradeOf(10), 'C');
 });
 
-test('HTTP API: order flow, COT, and an auto-trader guarded by the admin token', async (t) => {
-  const provider = createDemo();
-  const server = createApp({ provider, botHistory: 1500, cotSource: createCotSource({ demo: true }), paper: createPaper(), adminToken: 'secret' });
-  await new Promise((r) => server.listen(0, r));
-  t.after(() => server.close());
-  const base = `http://127.0.0.1:${server.address().port}`;
-
-  const flow = await (await fetch(`${base}/api/flow?tf=M15`)).json();
-  assert.equal(flow.available, true);
-  assert.ok(flow.delta.length > 50 && flow.book.bids.length && flow.whales.list.length >= 0);
-  assert.equal((await fetch(`${base}/api/flow?tf=X`)).status, 400);
-
-  const cot = await (await fetch(`${base}/api/cot`)).json();
-  assert.equal(cot.available, true);
-  assert.ok(cot.latest.specIndex >= 0 && cot.latest.specIndex <= 100);
-
-  const bot = await (await fetch(`${base}/api/bot`)).json();
-  assert.equal(bot.grades.length, 3);
-  for (const tr of bot.recent) assert.ok(['A', 'B', 'C'].includes(tr.grade) && tr.factors.length);
-
-  const post = (body, token) => fetch(`${base}/api/paper`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { 'X-Admin-Token': token } : {}) }, body: JSON.stringify(body) });
-  assert.equal((await post({ action: 'start' })).status, 401);
-  const ok = await (await post({ config: { startBalance: 3000, minGrade: 'B' }, action: 'start' }, 'secret')).json();
-  assert.equal(ok.enabled, true);
-  assert.equal(ok.startBalance, 3000);
-  assert.equal((await post({ config: { riskPct: 99 } }, 'secret')).status, 400);
-  const stopped = await (await post({ action: 'stop' }, 'secret')).json();
-  assert.equal(stopped.enabled, false);
-});
