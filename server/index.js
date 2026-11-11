@@ -503,6 +503,16 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.on('unhandledRejection', (e) => console.error(`${stamp()} Unhandled rejection: ${e?.stack || e}`));
   setInterval(() => console.log(`${stamp()} Memory ${Math.round(process.memoryUsage().rss / 1048576)} MB`), 10 * 60000).unref();
   const { providers, flowProviders } = createProviders(process.env);
+  // Render's free plan stops a service after 15 minutes without a visitor, which
+  // also stops the auto-trader and forces a fresh backtest on the next visit.
+  // A request to the service's own public address every 10 minutes keeps it awake.
+  const self = process.env.RENDER_EXTERNAL_URL;
+  if (self && process.env.KEEP_ALIVE !== '0') {
+    setInterval(() => {
+      fetch(`${self}/api/config`, { signal: AbortSignal.timeout(20000) }).catch((e) => console.log(`${stamp()} Keep-alive failed: ${e.message}`));
+    }, 10 * 60000).unref();
+    console.log(`${stamp()} Keep-alive on for ${self}`);
+  }
   const port = +process.env.PORT || 3000;
   const paper = createPaper({ file: path.resolve(ROOT, process.env.DATA_DIR || 'data', 'paper.json') });
   const adminToken = process.env.ADMIN_TOKEN || '';
