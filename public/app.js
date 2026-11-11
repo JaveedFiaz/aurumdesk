@@ -355,8 +355,24 @@ async function loadDayOpen() {
 }
 
 let tapeDirty = false;
+// Busy markets print dozens of trades a second: the price on screen is
+// refreshed once per animation frame with the latest one.
+const pendingPrice = {};
+let priceFrame = 0;
+function queuePrice(market, p, t) {
+  pendingPrice[market] = { p, t };
+  if (priceFrame) return;
+  priceFrame = requestAnimationFrame(() => {
+    priceFrame = 0;
+    for (const [m, v] of Object.entries(pendingPrice)) {
+      delete pendingPrice[m];
+      onPrice(m, v.p, v.t);
+    }
+  });
+}
+
 function onTrade(market, t) {
-  onPrice(market, t.price + (market === state.market ? (state.flow?.basis || 0) : 0), Math.floor(t.time));
+  queuePrice(market, t.price + (market === state.market ? (state.flow?.basis || 0) : 0), Math.floor(t.time));
   if (market !== state.market) return;
   state.tape.push(t);
   tapeDirty = true;

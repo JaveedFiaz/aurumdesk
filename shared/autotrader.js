@@ -107,6 +107,8 @@ export function createAutoTrader({ storage = null, broker = paperBroker(), now =
       return {
         ...rest,
         history: closed.slice(0, 60),
+        // At most ~300 points for the chart.
+        equity: state.equity.filter((_, i, arr) => arr.length <= 300 || i === arr.length - 1 || i % Math.ceil(arr.length / 300) === 0),
         broker: broker.name,
         live: broker.live,
         unrealized: u,
