@@ -22,7 +22,7 @@ const NATIVES = [
 // 429. Every provider in this process shares one budget: bulk history pages
 // are paced, and after a 429/418 nothing is sent until the ban has passed.
 const limiter = { nextFree: 0, blockedUntil: 0 };
-const PACE_MS = 150; // one history page (weight 2) every 150 ms, about 800 weight a minute
+const PACE_MS = 400; // one history page (weight 2) every 400 ms, about 300 weight a minute
 
 export function binanceBlockedUntil() {
   return limiter.blockedUntil;
