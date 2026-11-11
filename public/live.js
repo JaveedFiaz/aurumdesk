@@ -81,3 +81,11 @@ export const binance = {
     };
   },
 };
+
+// Binance's gold perpetual straight from the browser: used for the gold chart
+// when the server cannot reach it (some regions block Binance futures).
+export async function goldPerp(tf, limit = 600) {
+  const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${IV[tf]}&limit=${limit}`, { signal: AbortSignal.timeout(4000) });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return (await res.json()).map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], buyVolume: +k[9] }));
+}

@@ -261,7 +261,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 
 /* On-chart trade guide */
-.guide { position: absolute; left: 10px; top: 10px; z-index: 3; width: min(300px, calc(100% - 90px)); padding: 10px 12px; border-radius: 16px; background: rgba(20, 10, 46, .82); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 12px; display: grid; gap: 6px; box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .7); animation: guideIn .5s var(--ease); pointer-events: none; }
+.guide { position: absolute; left: 10px; top: 10px; z-index: 3; width: min(300px, calc(100% - 90px)); padding: 10px 12px; border-radius: 16px; background: rgba(20, 10, 46, .82); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 12px; display: grid; gap: 6px; box-shadow: 0 12px 30px -10px rgba(0, 0, 0, .7); animation: guideIn .5s var(--ease); cursor: grab; touch-action: none; user-select: none; }
+.guide.dragging { cursor: grabbing; opacity: .85; }
+.guide .grip { font-size: 10px; color: var(--faint); letter-spacing: 1px; margin: -4px 0 -2px; }
 .guide:empty { display: none; }
 .guide.active.bull { border-color: rgba(52, 245, 197, .7); box-shadow: 0 0 0 1px rgba(52, 245, 197, .25), 0 0 30px -6px rgba(52, 245, 197, .6); }
 .guide.active.bear { border-color: rgba(255, 95, 162, .7); box-shadow: 0 0 0 1px rgba(255, 95, 162, .25), 0 0 30px -6px rgba(255, 95, 162, .6); }
@@ -276,10 +278,15 @@ button, input, select { font: inherit; color: inherit; }
 .guide .wz { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border-radius: 10px; background: rgba(255, 255, 255, .06); font-family: var(--mono); }
 .guide .wz.bull { box-shadow: inset 3px 0 0 var(--bull); }
 .guide .wz.bear { box-shadow: inset 3px 0 0 var(--bear); }
-.flash-sig { position: absolute; inset: 0; z-index: 5; display: grid; place-content: center; pointer-events: none; font: 900 clamp(34px, 7vw, 72px)/1 var(--font); letter-spacing: 2px; text-shadow: 0 0 30px currentColor; animation: sigPop 3.2s var(--ease) forwards; }
+.flash-sig { position: absolute; right: 70px; top: 12px; z-index: 5; display: grid; padding: 12px 18px; border-radius: 16px; pointer-events: none; font: 900 clamp(22px, 3vw, 34px)/1 var(--font); letter-spacing: 2px; text-shadow: 0 0 30px currentColor; animation: sigPop 3.2s var(--ease) forwards; }
 .flash-sig[hidden] { display: none; }
-.flash-sig.bull { color: var(--bull); background: radial-gradient(circle, rgba(52, 245, 197, .18), transparent 60%); }
-.flash-sig.bear { color: var(--bear); background: radial-gradient(circle, rgba(255, 95, 162, .18), transparent 60%); }
-.flash-sig small { display: block; margin-top: 10px; font-size: 15px; letter-spacing: .5px; color: var(--text); text-shadow: none; text-align: center; }
+.flash-sig.bull { color: var(--bull); background: rgba(20, 10, 46, .88); border: 1px solid var(--bull); }
+.flash-sig.bear { color: var(--bear); background: rgba(20, 10, 46, .88); border: 1px solid var(--bear); }
+.flash-sig small { display: block; margin-top: 6px; font-size: 12px; letter-spacing: .5px; color: var(--text); text-shadow: none; text-align: center; }
 @keyframes sigPop { 0% { opacity: 0; transform: scale(.6); } 12% { opacity: 1; transform: scale(1.06); } 20% { transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; transform: scale(1.04); } }
 @media (max-width: 760px) { .guide { width: calc(100% - 80px); font-size: 11px; } }
+
+.track-body { display: grid; gap: 10px; }
+.track-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.track-eq .big { font-size: 26px; font-weight: 800; }
+.track .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); flex: 1 1 320px; }

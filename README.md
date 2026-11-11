@@ -17,6 +17,8 @@ automatically so you can track performance.
 - **Everything live.** Your browser streams candles, every trade and the top of the order book (10 times a second) straight from Binance, so prices, whales, order flow and the book update instantly without waiting on the server. If the stream is blocked, the page falls back to the server every few seconds.
 - **News.** Headlines from free feeds, checked every few seconds and tagged by market, impact and likely direction, plus a countdown to high-impact US events.
 - **Paper auto-trader.** Takes every setup from a proven strategy on both markets, sizes it to your risk %, and manages stop, target and time stop. Shows equity, win rate, profit factor, open trades and history.
+- **Track record.** The last 30 days of trades from the proven strategies on both markets, replayed as a $10,000 account at 1% risk, so you can see how the terminal is doing even right after the paper account resets.
+- **Always-on zones.** The nearest fresh buy zone (demand) below price and sell zone (supply) above stay on the chart; the setup guide card can be dragged anywhere.
 - **TradingView view.** A switch swaps in TradingView's own chart for the current market and timeframe.
 
 ## Strategies
@@ -80,6 +82,7 @@ backtests.
 
 | What | Source |
 |---|---|
+| Gold chart candles | Binance's XAUUSDT gold perpetual (deep, real volume), shifted onto the live spot price. Where Binance futures are blocked, candles are built from the live spot ticks while the server runs, with shifted PAXG candles for older history. |
 | Gold price | Live spot XAU/USD from Swissquote's public quote feed, polled every second (set `SPOT_GOLD=0` to turn it off). The candles, order flow and signals come from PAXG/USDT, which the strategies were tested on, shifted by the live spot–PAXG gap so everything lines up with spot. |
 | Gold candles | PAXG/USDT on Binance by default. Set `PROVIDER=oanda` with a free OANDA practice key for spot XAU/USD, the same prices as TradingView's `OANDA:XAUUSD`. OANDA candles carry no buy/sell volume, so the order-flow checks are skipped and the gold 5m strategy (which requires them) stays idle on that feed. |
 | Bitcoin prices | BTC/USDT on Binance. |
