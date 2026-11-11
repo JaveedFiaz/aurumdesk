@@ -34,7 +34,7 @@ last 40% of the period, are traded ([full results](docs/backtest-results.md)):
 | Bitcoin | 5m | Trap + order flow | 2R | PF 1.14: watch only |
 | Bitcoin | 1m | Sweep into zone | 3R | fails on recent data: watch only |
 
-The server re-tests every play every 6 hours. A play is traded only while it
+The server re-tests every play every 12 hours. A play is traded only while it
 has 20+ trades, profit factor ≥ 1.15, an average of +0.05R or more, and a
 profit on the most recent 40% of its history. Otherwise its setups are shown as
 **watch only** and the auto-trader ignores them.
@@ -65,14 +65,15 @@ npm start                 # http://localhost:3000
 - `npm test`: the test suite.
 - `npm run backtest`: backtest every play on real data.
 
-On start the server downloads the history and backtests each play, which takes
-a few minutes. Setups appear once a timeframe's backtest finishes.
+On start the server backtests one play at a time in a worker: the 15m plays
+are ready in about a minute and the 1m plays after about five. Setups appear
+once a timeframe's backtest finishes.
 
 **Hosting:** the Render blueprint (`render.yaml`) deploys it as a web service.
 Render's free plan sleeps after 15 minutes without visitors, and the
 auto-trader stops while it sleeps, so use a paid instance to run it around the
-clock. The server needs about 400 MB of memory; set `HISTORY_SCALE=0.5` on
-smaller instances.
+clock. The server uses about 130 MB of memory, peaking near 200 MB while it
+backtests.
 
 ## Data
 

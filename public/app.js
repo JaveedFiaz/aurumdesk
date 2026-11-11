@@ -454,7 +454,7 @@ function checkNewSignals() {
 function renderScore() {
   const b = state.bots[state.market];
   if (!b) return;
-  $('scoreMeta').textContent = `${mk().label} · real history · re-tested every 6 hours`;
+  $('scoreMeta').textContent = `${mk().label} · real history · re-tested every 12 hours`;
   $('score').innerHTML = Object.entries(b.tfs).map(([tf, t]) => {
     if (t.pending) return `<div class="sc"><div class="t">${TF[tf].label} · ${t.strategies.map(stratName).join(', ')}<span class="st off">${t.error ? 'ERROR' : 'TESTING'}</span></div><div class="n">${t.error ? esc(t.error) : 'Backtesting on real history…'}</div></div>`;
     return t.stats.map((s) => `<div class="sc" title="${esc(s.desc)}"><div class="t">${TF[tf].label} · ${esc(s.name)}<span class="st ${s.active ? 'on' : 'off'}">${s.active ? 'TRADING' : 'WATCH ONLY'}</span></div>
