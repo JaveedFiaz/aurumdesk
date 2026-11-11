@@ -62,3 +62,18 @@ one half: VWAP pullback, Sweep + CHoCH, liquidity absorption, unfiltered traps,
 and volume breakouts on 1m and 5m.
 
 Past results do not guarantee future results.
+
+## Scalping strategies tested and rejected (2026-11-11)
+
+Three common scalping methods were tested on the same 1m and 5m history, at
+1.5R and 2R targets, for gold and Bitcoin. They trade often but none beats
+trading costs, and no filter (trend, sweep, order flow, session) made any of
+them profitable in both halves of the data:
+
+| Strategy | Gold 5m | Gold 1m | Bitcoin 5m | Bitcoin 1m |
+|---|---|---|---|---|
+| EMA 20 trend pullback (2R) | 846 trades, −0.11R | 726, −0.01R | 875, −0.08R | 756, −0.12R |
+| VWAP 2σ snap-back (2R) | 460, −0.02R | 600, −0.12R | 682, −0.16R | 664, −0.13R |
+| London/NY opening-range breakout (2R) | 26, −0.18R | 3 trades | 47, −0.38R | 2 trades |
+
+They stay in the code for re-testing but are not traded or signalled.
