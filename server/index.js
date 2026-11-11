@@ -82,7 +82,7 @@ function runInWorker(c, h, opts) {
 export function createApp({
   providers,
   flowProviders = providers,
-  pollMs = 2000,
+  pollMs = 3000,
   historyScale = 1,
   useWorker = true,
   retestMs = 6 * 3600 * 1000,
@@ -108,6 +108,9 @@ export function createApp({
     plays: Object.fromEntries(PLAY_TFS.filter((tf) => m.plays[tf]).map((tf) => [tf, { full: null, live: null, error: null, testing: false, testedAt: 0, lastBar: 0 }])),
     ready: false,
     lastRefresh: 0,
+    tape: [], // recent trades from the live stream
+    streamAt: 0,
+    lastPush: 0,
   }));
   const byId = Object.fromEntries(markets.map((x) => [x.m.id, x]));
   const need = (x, tf) => Math.max(1500, Math.round(x.m.plays[tf].history * historyScale));
@@ -211,15 +214,40 @@ export function createApp({
     }
   }
 
+  function setPrice(x, p) {
+    if (!Number.isFinite(p)) return;
+    prices[x.m.id] = p;
+    broadcast({ m: x.m.id, t: Math.floor(Date.now() / 1000), p });
+    paper.onPrice(p, x.m.id, prices);
+  }
+
+  const streaming = (x) => Date.now() - x.streamAt < 15000;
+
+  // One WebSocket carries every market's trades: prices without polling, and
+  // the tape for whales and order flow.
+  let stopStream = () => {};
+  function startStream() {
+    const src = markets.filter((x) => x.flow && x.flow.stream && x.flow.symbol);
+    if (!src.length) return;
+    const bySymbol = Object.fromEntries(src.map((x) => [x.flow.symbol.toUpperCase(), x]));
+    stopStream = src[0].flow.stream(Object.keys(bySymbol), (symbol, t) => {
+      const x = bySymbol[symbol];
+      if (!x) return;
+      x.streamAt = Date.now();
+      x.tape.push(t);
+      if (x.tape.length > 1500) x.tape.splice(0, x.tape.length - 1000);
+      // The stream is the price feed only when prices and flow come from the same market.
+      if (x.flow === x.provider && Date.now() - x.lastPush >= 500) {
+        x.lastPush = Date.now();
+        setPrice(x, t.price);
+      }
+    });
+  }
+
   async function loop(x) {
     while (!closed) {
       try {
-        const p = await x.provider.fetchPrice();
-        if (Number.isFinite(p)) {
-          prices[x.m.id] = p;
-          broadcast({ m: x.m.id, t: Math.floor(Date.now() / 1000), p });
-          paper.onPrice(p, x.m.id, prices);
-        }
+        if (!(streaming(x) && x.flow === x.provider)) setPrice(x, await x.provider.fetchPrice());
         if (x.ready && Date.now() - x.lastRefresh > 5000) {
           x.lastRefresh = Date.now();
           await refreshCandles(x);
@@ -234,6 +262,7 @@ export function createApp({
   async function boot() {
     cot = await cotSource.get().catch(() => null);
     news.start();
+    startStream();
     for (const x of markets) loop(x);
     for (const x of markets) {
       // A failed history load is retried every minute.
@@ -259,7 +288,8 @@ export function createApp({
   async function candles(x, tfId, limit) {
     const key = `${x.m.id}:${tfId}:${limit}`;
     const hit = candleCache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_MS) return hit.promise;
+    // Timeframes outside the plays (the daily candle for the day's change) change slowly.
+    if (hit && Date.now() - hit.at < (x.hist[tfId] ? CACHE_MS : 60000)) return hit.promise;
     // Serve the play timeframes from memory when the history is loaded.
     const promise = x.ready && x.hist[tfId] && x.hist[tfId].length >= limit && Date.now() / 1000 - x.hist[tfId].at(-1).time < TF[tfId].sec + 15
       ? Promise.resolve(x.hist[tfId].slice(-limit))
@@ -274,30 +304,44 @@ export function createApp({
   // prices are shifted by that basis so walls and big trades line up with the chart.
   async function orderFlow(x, tfId) {
     if (!x.flow) return { available: false };
-    const key = `${x.m.id}:${tfId}`;
-    const hit = flowCache.get(key);
-    if (hit && Date.now() - hit.at < 2000) return hit.promise;
-    const promise = (async () => {
-      const [fc, trades, book] = await Promise.all([getCandles(x.flow, tfId, 120), x.flow.fetchTrades(1000), x.flow.fetchBook(500)]);
-      const flowPrice = trades.length ? trades[trades.length - 1].price : fc[fc.length - 1]?.close;
-      const main = prices[x.m.id];
-      const basis = x.flow !== x.provider && main != null && Number.isFinite(flowPrice) ? main - flowPrice : 0;
-      const shift = (l) => ({ ...l, price: l.price + basis });
-      const shifted = trades.map(shift);
-      return {
-        available: true,
-        source: x.flow.label,
-        symbol: x.flow.symbol || null,
-        basis,
-        delta: deltaSeries(fc),
-        tape: tradeFlow(shifted),
-        whales: whales(shifted),
-        book: bookStats({ bids: book.bids.map(shift), asks: book.asks.map(shift) }, { bucket: x.m.id === 'btc' ? 25 : 1 }),
-      };
-    })();
-    flowCache.set(key, { at: Date.now(), promise });
-    promise.catch(() => flowCache.delete(key));
-    return promise;
+    // The book is the one heavy request (weight 25), so every viewer shares it for 8 s.
+    const bk = flowCache.get(`book:${x.m.id}`);
+    const bookP = bk && Date.now() - bk.at < 8000 ? bk.promise : x.flow.fetchBook(500);
+    if (!bk || bk.promise !== bookP) {
+      flowCache.set(`book:${x.m.id}`, { at: Date.now(), promise: bookP });
+      bookP.catch(() => flowCache.delete(`book:${x.m.id}`));
+    }
+    const mem = x.flow === x.provider && x.ready && x.hist[tfId];
+    const tk = flowCache.get(`tape:${x.m.id}`);
+    const tapeP = streaming(x) && x.tape.length >= 200 ? Promise.resolve(x.tape.slice(-1000))
+      : tk && Date.now() - tk.at < 8000 ? tk.promise : x.flow.fetchTrades(1000);
+    if (!(streaming(x) && x.tape.length >= 200) && (!tk || tk.promise !== tapeP)) {
+      flowCache.set(`tape:${x.m.id}`, { at: Date.now(), promise: tapeP });
+      tapeP.catch(() => flowCache.delete(`tape:${x.m.id}`));
+    }
+    const ck = flowCache.get(`c:${x.m.id}:${tfId}`);
+    const candP = mem ? Promise.resolve(mem.slice(-120)) : ck && Date.now() - ck.at < 8000 ? ck.promise : getCandles(x.flow, tfId, 120);
+    if (!mem && (!ck || ck.promise !== candP)) {
+      flowCache.set(`c:${x.m.id}:${tfId}`, { at: Date.now(), promise: candP });
+      candP.catch(() => flowCache.delete(`c:${x.m.id}:${tfId}`));
+    }
+    const [fc, trades, book] = await Promise.all([candP, tapeP, bookP]);
+    const flowPrice = trades.length ? trades[trades.length - 1].price : fc[fc.length - 1]?.close;
+    const main = prices[x.m.id];
+    const basis = x.flow !== x.provider && main != null && Number.isFinite(flowPrice) ? main - flowPrice : 0;
+    const shift = (l) => ({ ...l, price: l.price + basis });
+    const shifted = trades.map(shift);
+    return {
+      available: true,
+      source: x.flow.label,
+      symbol: x.flow.symbol || null,
+      live: streaming(x),
+      basis,
+      delta: deltaSeries(fc),
+      tape: tradeFlow(shifted),
+      whales: whales(shifted),
+      book: bookStats({ bids: book.bids.map(shift), asks: book.asks.map(shift) }, { bucket: x.m.id === 'btc' ? 25 : 1 }),
+    };
   }
 
   function readJson(req) {
@@ -392,6 +436,7 @@ export function createApp({
 
   server.on('close', () => {
     closed = true;
+    stopStream();
     news.stop();
   });
   server.ready = ready;
