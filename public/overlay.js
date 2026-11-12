@@ -206,15 +206,25 @@ export class Overlay {
       if (yt == null || yb == null) continue;
       const grad = this.ctx.createLinearGradient(x1, 0, right, 0);
       grad.addColorStop(0, bull ? green(a.watch ? 0.03 : 0.06) : red(a.watch ? 0.03 : 0.06));
-      grad.addColorStop(1, bull ? green(a.watch ? 0.16 : 0.24) : red(a.watch ? 0.16 : 0.24));
+      grad.addColorStop(1, bull ? green(a.strong ? 0.3 : a.watch ? 0.16 : 0.24) : red(a.strong ? 0.3 : a.watch ? 0.16 : 0.24));
       this.ctx.fillStyle = grad;
       this.ctx.fillRect(x1, Math.min(yt, yb), right - x1, Math.max(2, Math.abs(yb - yt)));
-      this.box(x1, right, yt, yb, 'rgba(0,0,0,0)', bull ? green(a.watch ? 0.5 : 0.85) : red(a.watch ? 0.5 : 0.85), true);
+      if (a.strong) {
+        // Strong zones: solid glowing border.
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.shadowColor = bull ? '#16c784' : '#ea3943';
+        ctx.shadowBlur = 12;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = bull ? green(0.95) : red(0.95);
+        ctx.strokeRect(x1 + 0.5, Math.min(yt, yb) + 0.5, right - x1, Math.max(2, Math.abs(yb - yt)));
+        ctx.restore();
+      } else this.box(x1, right, yt, yb, 'rgba(0,0,0,0)', bull ? green(a.watch ? 0.5 : 0.85) : red(a.watch ? 0.5 : 0.85), true);
       if (a.stop != null) this.hline(x1, right, Y(a.stop), bull ? red(0.6) : green(0.6), [4, 4], 1);
       const label = a.watch
-        ? `${bull ? 'BUY ZONE' : 'SELL ZONE'} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}`
+        ? `${a.strong ? 'STRONG ' : ''}${bull ? 'BUY ZONE' : 'SELL ZONE'} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}${a.score != null ? ` ${a.score}` : ''}`
         : `${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`;
-      this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch ? 'rgba(22,199,132,0.75)' : '#16c784') : (a.watch ? 'rgba(234,57,67,0.75)' : '#ea3943'), '#140a2e', 'right');
+      this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch && !a.strong ? 'rgba(22,199,132,0.75)' : '#16c784') : (a.watch && !a.strong ? 'rgba(234,57,67,0.75)' : '#ea3943'), a.strong ? '#ffffff' : '#140a2e', 'right');
     }
 
     for (const g of t.triggers || []) {

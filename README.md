@@ -18,7 +18,7 @@ automatically so you can track performance.
 - **News.** Headlines from free feeds, checked every few seconds and tagged by market, impact and likely direction, plus a countdown to high-impact US events.
 - **Paper auto-trader.** Takes every setup from a proven strategy on both markets, sizes it to your risk %, and manages stop, target and time stop. Shows equity, win rate, profit factor, open trades and history.
 - **Track record.** The last 30 days of trades from the proven strategies on both markets, replayed as a $10,000 account at 1% risk, so you can see how the terminal is doing even right after the paper account resets.
-- **Always-on zones.** The nearest fresh buy zone (demand) below price and sell zone (supply) above stay on the chart; the setup guide card can be dragged anywhere.
+- **Always-on zones.** Up to two fresh buy zones (demand) below price and sell zones (supply) above stay on the chart; zones scoring 70+ and untouched order blocks are drawn with a glowing border as STRONG BUY/SELL ZONE; the setup guide card can be dragged anywhere.
 - **TradingView view.** A switch swaps in TradingView's own chart for the current market and timeframe.
 
 ## Strategies
@@ -38,11 +38,14 @@ otherwise no filter. About 1.4 trades a day across both markets:
 | Gold | 15m | EMA trend pullback | 3R | 7/8 | 57 in 2 years | 39 | 1.27 | +9.9 |
 | Gold | 5m | Session sweep | 3R | 6/8 | 46 in 1 year | 39 | 1.50 | +14.8 |
 | Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
+| Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | 45 | 1.38 | +6.4 |
 | Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
 | Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |
 | Bitcoin | 15m | Volume surge go | 2R | 7/7 | 78 in 2 years | 41 | 1.27 | +13.3 |
 | Bitcoin | 5m | Session sweep | 3R | 5/7 | 63 in 1 year | 49 | 1.88 | +30.4 |
 | Bitcoin | 5m | Trap + order flow | 1.5R | 5/7 | 39 in 1 year | 49 | 1.23 | +5.0 |
+
+**Strong zone rejection** (a wick into strong support or resistance, closing back out on 1.2× volume with order flow behind it) runs on every 5m and 15m chart. It only proved profitable on gold 5m; elsewhere its setups are drawn as watch only.
 
 At double trading costs every gold and Bitcoin 15m strategy stays profitable;
 the two Bitcoin 5m strategies drop to watch only. The 1m strategies stay on watch.
