@@ -441,21 +441,29 @@ function drawMarkers() {
   }));
 }
 
-// Buy and sell zones are always on the chart: the strategies' own areas, and
-// otherwise the strongest fresh demand below and supply above price.
+// Buy and sell zones are always on the chart: the strategies' own areas, plus
+// the strongest fresh demand below price and supply above it (up to two per
+// side). Zones scoring 70+ (or untouched order blocks) are marked STRONG.
 function withZones(areas) {
   const r = state.result;
   const c = state.candles;
   if (!r || !c.length) return areas;
   const price = c[c.length - 1].close;
   const out = [...areas];
+  const overlaps = (z) => out.some((a) => a.dir === z.side && z.bottom <= a.top && z.top >= a.bottom);
   for (const dir of ['bull', 'bear']) {
-    if (out.some((a) => a.dir === dir)) continue;
     const bull = dir === 'bull';
-    const z = [...r.zones, ...r.orderBlocks]
-      .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price) && !(r.atr > 0 && x.top - x.bottom > 2.5 * r.atr))
-      .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))[0];
-    if (z) out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply' });
+    [...r.zones, ...r.orderBlocks]
+      .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price)
+        && !(r.atr > 0 && x.top - x.bottom > 2.5 * r.atr) && (x.score == null || x.score >= 50) && (x.touches ?? 0) <= 3)
+      .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))
+      .filter((z) => !overlaps(z))
+      .slice(0, 2)
+      .forEach((z) => {
+        if (overlaps(z)) return; // overlaps one added just before
+        const ob = /OB/.test(z.kind);
+        out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, strong: ob ? !z.touches : z.score >= 70, score: z.score, kind: ob ? 'order block' : bull ? 'demand' : 'supply' });
+      });
   }
   return out;
 }
@@ -843,7 +851,7 @@ function renderGuide() {
   const waits = plays.flatMap(([tf, t]) => [
     ...t.areas.map((a) => sh(a, k)).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })),
     ...t.triggers.map((g) => sh(g, k)).map((g) => ({ tf, dir: g.dir, text: `${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}`, at: g.price })),
-  ]).concat(withZones([]).filter((a) => a.watch).map((a) => ({ tf: state.tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 }))).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
+  ]).concat(withZones([]).filter((a) => a.watch).map((a) => ({ tf: state.tf, dir: a.dir, text: `${a.strong ? 'STRONG ' : ''}${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 }))).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
   setGuide(el, `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
     ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`, 'guide');
 }

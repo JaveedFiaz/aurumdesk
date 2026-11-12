@@ -39,6 +39,8 @@ export const RETIRED = [
   { id: 'pdhl_reject', name: 'PDH/PDL reject', desc: 'First wick of the day through the previous day high or low.' },
   { id: 'htf_zone', name: '1H zone reject', desc: 'First touch of an untested 1H supply/demand zone.' },
   { id: 'ema_pullback', name: 'EMA trend pullback', desc: 'EMA 20 above EMA 50 (below for shorts): price dips to the EMA 20 and closes back on the trend side with buyers (sellers) in control.' },
+  { id: 'zone_reject', name: 'Strong zone rejection', desc: 'Price wicks into a strong support (demand) or resistance (supply) zone and closes back out of it on 1.2× volume or more, with order flow behind the rejection.' },
+  { id: 'zone_reject_trend', name: 'Zone rejection with trend', desc: 'A strong zone rejection in the direction of the 1H trend.' },
   { id: 'bos_retest', name: 'Break & retest', desc: 'Structure breaks in the higher-timeframe trend direction, price comes back to the broken level once and rejects it with order flow.' },
   { id: 'asia_sweep', name: 'Session sweep', desc: 'At the London or New York open, price runs the previous session\'s high or low and closes back inside.' },
   { id: 'surge_go', name: 'Volume surge go', desc: 'A 2.5× volume candle with a full body and order flow behind it, in the higher-timeframe trend, closing at a 10-candle extreme.' },
@@ -161,6 +163,13 @@ function vwapBand(w, L) {
 // Session opens (UTC minutes): London 07:00, New York 13:30.
 const OPENS = [420, 810];
 
+// Strong zones: unbroken supply/demand scoring 50+ (or 1H zones), touched at
+// most three times before, and no taller than 2.5 ATR.
+export function strongZones(zones, htf, A) {
+  return [...zones, ...(htf?.zones || []).map((z) => ({ ...z, htf: true }))]
+    .filter((z) => !z.broken && (z.htf || z.score >= 50) && (z.touches ?? 0) <= 3 && z.top - z.bottom <= 2.5 * A);
+}
+
 export const CHECKS = {
   // Trend pullback: EMA 20 above EMA 50 (below for shorts), price dips to the
   // EMA 20 and closes back on the trend side with buyers (sellers) in control.
@@ -246,6 +255,38 @@ export const CHECKS = {
       return plan(dir, bar, stop, { why: `Snapped back inside the VWAP 2σ band (VWAP ${band.mean.toFixed(2)})` });
     }
     return null;
+  },
+
+  // Strong zone rejection: a wick into strong demand (support) or supply
+  // (resistance), a close back out of the zone, big volume and order flow.
+  zone_reject(ctx) {
+    const { w, a, zones, htf } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const A = a[L];
+    const vAvg = avgVolume(w, L);
+    if (!(bar.volume >= 1.2 * vAvg)) return null;
+    const range = bar.high - bar.low;
+    if (!(range > 0)) return null;
+    const pool = strongZones(zones, htf, A);
+    for (const dir of ['bull', 'bear']) {
+      const bull = dir === 'bull';
+      if (!rejects(bar, dir) || !flowAgrees(bar, dir, 0.1)) continue;
+      const wick = bull ? Math.min(bar.open, bar.close) - bar.low : bar.high - Math.max(bar.open, bar.close);
+      if (wick < 0.4 * range) continue;
+      const z = pool.find((x) => x.side === dir && (bull
+        ? bar.low <= x.top && bar.low >= x.bottom - 0.5 * A && bar.close > x.top
+        : bar.high >= x.bottom && bar.high <= x.top + 0.5 * A && bar.close < x.bottom));
+      if (!z) continue;
+      const stop = bull ? Math.min(bar.low, z.bottom) - 0.2 * A : Math.max(bar.high, z.top) + 0.2 * A;
+      return plan(dir, bar, stop, { why: `Rejected strong ${bull ? 'support' : 'resistance'} ${z.bottom.toFixed(2)}–${z.top.toFixed(2)} on ${(bar.volume / vAvg).toFixed(1)}× volume`, zone: { top: z.top, bottom: z.bottom } });
+    }
+    return null;
+  },
+
+  zone_reject_trend(ctx) {
+    const s = CHECKS.zone_reject(ctx);
+    return s && ctx.htf && ctx.htf.trend === s.dir ? { ...s, why: `${s.why}, with the 1H trend` } : null;
   },
 
   // Break and retest: the most recent structure break in the 1H trend
