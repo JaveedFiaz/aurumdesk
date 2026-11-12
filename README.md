@@ -38,7 +38,7 @@ otherwise no filter. About 1.4 trades a day across both markets:
 | Gold | 15m | EMA trend pullback | 3R | 7/8 | 57 in 2 years | 39 | 1.27 | +9.9 |
 | Gold | 5m | Session sweep | 3R | 6/8 | 46 in 1 year | 39 | 1.50 | +14.8 |
 | Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
-| Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | 45 | 1.38 | +6.4 |
+| Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | — | 1.38 | +6.4 |
 | Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
 | Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |
 | Bitcoin | 15m | Volume surge go | 2R | 7/7 | 78 in 2 years | 41 | 1.27 | +13.3 |
