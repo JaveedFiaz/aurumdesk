@@ -75,10 +75,17 @@
 
     <section class="card wide memes" style="--i:7">
       <h2>Memecoin radar <span id="memeMeta" class="meta">Binance · live</span></h2>
-      <p class="meme-note">Live pump and dump detection on 23 Binance memecoins from 1-minute volume, taker buy/sell flow and the order book.
-        <b>Tested on the last 14 days:</b> after a PUMP, price was lower one hour later 70–80% of the time, and chasing pumps lost money.
-        FADE setups (the first candle against a 3%+ move) made a small profit, but on only 28 trades: experimental, not proven. Memecoins can move 20% in minutes.</p>
-      <div class="meme-wrap"><table class="meme-table"><thead><tr><th>Coin</th><th>Price</th><th>5m</th><th>1h</th><th>24h</th><th title="Volume of the last 3 minutes vs the hour's average">Vol ×</th><th title="Share of volume from aggressive buyers (last 3 minutes)">Buyers</th><th title="Order book, top 10 levels: bids vs asks">Book</th><th>Signal</th></tr></thead><tbody id="memeRows"><tr><td colspan="9" class="muted">Connecting to Binance…</td></tr></tbody></table></div>
+      <div class="meme-tabs" id="memeTabs" role="group" aria-label="Memecoin market">
+        <button type="button" data-tab="fut">Futures memes <b id="mtFut"></b></button>
+        <button type="button" data-tab="spot">Spot memes <b id="mtSpot"></b></button>
+        <button type="button" data-tab="new">New listings <b id="mtNew"></b></button>
+        <button type="button" data-tab="signals">Signals now <b id="mtSig"></b></button>
+      </div>
+      <p class="meme-note">Coins are found automatically on Binance: futures contracts in Binance's Meme category, spot memecoins, and every futures contract listed in the last 3 weeks (new ones appear on their own).
+        Live 1-minute volume, aggressive buyers vs sellers, order book, and for futures the funding rate and open-interest change.
+        <b>Tested on 14 days of data:</b> after a PUMP, price was lower one hour later 70–80% of the time, and chasing pumps lost money. FADE setups made a small profit on only 28 trades: experimental. Memecoins can move 20% in minutes.</p>
+      <div class="meme-wrap"><table class="meme-table"><thead><tr><th>Coin</th><th>Price</th><th>5m</th><th>1h</th><th>24h</th><th title="Volume of the last 3 minutes vs the hour's average">Vol ×</th><th title="Share of volume from aggressive buyers (last 3 minutes)">Buyers</th><th title="Order book, top 10 levels: bids vs asks">Book</th><th title="Futures funding rate (positive: longs pay shorts)">Funding</th><th title="Futures open interest change over the last hour">OI 1h</th><th>Signal</th></tr></thead><tbody id="memeRows"><tr><td colspan="11" class="muted">Finding memecoins on Binance…</td></tr></tbody></table></div>
+      <button type="button" id="memeMore" class="btn" hidden>Show all</button>
     </section>
     <section class="card wide track" style="--i:7"><h2>Track record <span id="trackMeta" class="meta"></span></h2><div id="track" class="track-body"></div></section>
     <section class="card wide" style="--i:7"><h2>Strategy scoreboard <span id="scoreMeta" class="meta"></span></h2><div id="score" class="score"></div></section>

@@ -29,3 +29,22 @@ test('memecoin radar: fade setup after a 3% pump turns down', () => {
   assert.equal(st.kind, 'fade-short');
   assert.ok(st.plan.stop > st.plan.entry && st.plan.target < st.plan.entry);
 });
+
+test('memecoin universe: futures Meme category, new listings and spot pairs are found automatically', async () => {
+  const { buildUniverse, coinOf } = await import('../server/memes.js');
+  assert.equal(coinOf('1000PEPE'), 'PEPE');
+  assert.equal(coinOf('1MBABYDOGE'), 'BABYDOGE');
+  assert.equal(coinOf('1000000MOG'), 'MOG');
+  const now = Date.UTC(2026, 10, 16);
+  const perp = (symbol, baseAsset, sub, days) => ({ symbol, baseAsset, quoteAsset: 'USDT', contractType: 'PERPETUAL', status: 'TRADING', underlyingSubType: sub, onboardDate: now - days * 86400000 });
+  const u = buildUniverse({
+    now,
+    futInfo: { symbols: [perp('1000PEPEUSDT', '1000PEPE', ['Meme'], 900), perp('NEWCATUSDT', 'NEWCAT', ['Meme'], 2), perp('AIXUSDT', 'AIX', ['AI'], 5), perp('ETHUSDT', 'ETH', ['Layer-1'], 2000)] },
+    spotInfo: { symbols: [{ symbol: 'PEPEUSDT', baseAsset: 'PEPE', quoteAsset: 'USDT', status: 'TRADING' }, { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', status: 'TRADING' }, { symbol: 'FROGUSDT', baseAsset: 'FROG', quoteAsset: 'USDT', status: 'TRADING' }] },
+    products: { data: [{ b: 'FROG', q: 'USDT', tags: ['Meme'] }] },
+  });
+  assert.deepEqual(u.futures.map((f) => f.symbol), ['1000PEPEUSDT', 'NEWCATUSDT']);
+  assert.deepEqual(u.fresh.map((f) => f.symbol), ['NEWCATUSDT', 'AIXUSDT']); // newest first, any category
+  assert.equal(u.fresh.find((f) => f.symbol === 'AIXUSDT').meme, false);
+  assert.deepEqual(u.spot.map((s) => s.symbol).sort(), ['FROGUSDT', 'PEPEUSDT']); // PEPE via its futures meme, FROG via the tag
+});

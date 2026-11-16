@@ -17,6 +17,7 @@ import { createNews } from './news.js';
 import { loadAndAnalyze, TAIL, HTF_TAIL } from './play.js';
 import { createSpotGold } from './spot.js';
 import { createGoldCandles } from './goldfeed.js';
+import { createMemeUniverse } from './memes.js';
 import { setBinanceBlocked } from './providers/binance.js';
 
 import { deltaSeries, tradeFlow, whales, bookStats } from '../shared/flow.js';
@@ -351,6 +352,7 @@ export function createApp({
 
   // Feed of new tradable setups, in the same text format as the signal
   // channels, for the MT5 copier (copier/copier.py with "feed_url").
+  const memes = createMemeUniverse({ log });
   const feedList = [];
   function publish(x, tf, sg) {
     const id = `${x.m.id}:${tf}:${sg.strategy}:${sg.signalTime}`;
@@ -501,6 +503,8 @@ export function createApp({
         const limit = Math.max(10, Math.min(1000, parseInt(q.get('limit'), 10) || 600));
         return send(res, 200, await goldCandles.get(q.get('tf') || 'M1', limit, spotPrice.gold ?? null));
       }
+      if (url.pathname === '/api/memes') return send(res, 200, await memes.universe());
+      if (url.pathname.startsWith('/api/fut/')) return send(res, 200, await memes.futures(url.pathname.slice(9), q));
       if (url.pathname === '/api/signals') {
         const since = +q.get('since') || 0;
         const mk = q.get('market');

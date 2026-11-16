@@ -1318,24 +1318,62 @@ function beep(freq = 700) {
 const px = (p) => (p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(5) : p.toPrecision(4));
 const pc = (v) => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
 let memeReadyAt = 0;
-function renderMemes(list) {
+let memeList = [];
+let memeTab = store.get('memeTab', 'fut');
+let memeAll = false;
+function renderMemes(list = memeList) {
+  memeList = list;
   const rank = (x) => (x.status ? ({ pump: 5, dump: 5, 'fade-short': 4, 'fade-long': 4, 'heat-up': 3, 'heat-down': 3 }[x.status.kind] || 0) : 0);
-  const rows = list.filter((x) => x.metrics).sort((a, b) => rank(b) - rank(a) || b.metrics.volX * Math.abs(b.metrics.m5) - a.metrics.volX * Math.abs(a.metrics.m5));
-  if (!rows.length) return;
-  $('memeMeta').textContent = `Binance · live · ${rows.filter((x) => x.status && rank(x) >= 4).length} active`;
-  $('memeRows').innerHTML = rows.map((x) => {
+  const tabs = {
+    fut: (x) => x.venue === 'fut' && x.meme,
+    spot: (x) => x.venue === 'spot',
+    new: (x) => x.isNew,
+    signals: (x) => rank(x) >= 3,
+  };
+  for (const [t, id] of [['fut', 'mtFut'], ['spot', 'mtSpot'], ['new', 'mtNew'], ['signals', 'mtSig']]) $(id).textContent = list.filter(tabs[t]).length;
+  document.querySelectorAll('#memeTabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === memeTab));
+  const sel = list.filter(tabs[memeTab]);
+  const rows = sel.filter((x) => x.metrics).sort((a, b) => rank(b) - rank(a) || b.metrics.volX * Math.abs(b.metrics.m5) - a.metrics.volX * Math.abs(a.metrics.m5));
+  $('memeMeta').textContent = `Binance · live · ${list.length} coins · ${list.filter((x) => rank(x) >= 4).length} active signals`;
+  const shown = memeAll ? rows : rows.slice(0, 40);
+  $('memeMore').hidden = rows.length <= 40;
+  $('memeMore').textContent = memeAll ? 'Show top 40' : `Show all ${rows.length}`;
+  if (!rows.length) {
+    $('memeRows').innerHTML = `<tr><td colspan="11" class="muted">${sel.length ? 'Loading candles…' : memeTab === 'signals' ? 'No pump, dump or fade setup right now.' : 'None found yet.'}</td></tr>`;
+    return;
+  }
+  const age = (t) => { const d = (Date.now() - t) / 86400000; return d < 1 ? `${Math.max(1, Math.round(d * 24))}h` : `${Math.round(d)}d`; };
+  $('memeRows').innerHTML = shown.map((x) => {
     const m = x.metrics;
     const st = x.status;
     const cls = (v) => (v >= 0 ? 'bull' : 'bear');
     const plan = st?.plan ? `<small>entry ${px(st.plan.entry)} · SL ${px(st.plan.stop)} · TP ${px(st.plan.target)}</small>` : '';
-    return `<tr class="${st ? `sig-${st.kind}` : ''}"><td><b>${esc(x.name)}</b></td><td class="mono">${px(m.price)}</td>
+    // Futures context for a move: open interest rising with price = new positions behind it.
+    let flow = '';
+    if (st && x.oi1h != null && (st.kind === 'pump' || st.kind === 'dump')) flow = `<small>${x.oi1h > 0.03 ? 'open interest rising: new positions behind the move' : x.oi1h < -0.03 ? 'open interest falling: positions closing (squeeze)' : 'open interest flat'}</small>`;
+    return `<tr class="${st ? `sig-${st.kind}` : ''}"><td><b>${esc(x.name)}</b><span class="venue ${x.venue}">${x.venue === 'fut' ? 'PERP' : 'SPOT'}</span>${x.isNew && x.onboard ? `<span class="newb">NEW ${age(x.onboard)}</span>` : ''}</td><td class="mono">${px(m.price)}</td>
       <td class="mono ${cls(m.m5)}">${pc(m.m5)}</td><td class="mono ${cls(m.m60)}">${pc(m.m60)}</td><td class="mono ${cls(x.day?.change ?? 0)}">${pc(x.day?.change)}</td>
       <td class="mono ${m.volX >= 3 ? 'hot' : ''}">${m.volX.toFixed(1)}×</td>
       <td><div class="mbar"><i style="width:${(m.buy * 100).toFixed(0)}%"></i></div><span class="mono small">${(m.buy * 100).toFixed(0)}%</span></td>
       <td class="mono ${x.book ? cls(x.book.imb) : ''}">${x.book ? `${x.book.imb >= 0 ? '+' : ''}${(x.book.imb * 100).toFixed(0)}%` : '—'}</td>
-      <td>${st ? `<span class="mbadge ${st.kind}">${st.text}</span>${plan}` : '<span class="muted small">—</span>'}</td></tr>`;
+      <td class="mono ${x.funding != null ? cls(-x.funding) : ''}">${x.funding != null ? `${(x.funding * 100).toFixed(3)}%` : '—'}</td>
+      <td class="mono ${x.oi1h != null ? cls(x.oi1h) : ''}">${pc(x.oi1h)}</td>
+      <td>${st ? `<span class="mbadge ${st.kind}">${st.text}</span>${plan}${flow}` : '<span class="muted small">—</span>'}</td></tr>`;
   }).join('');
 }
+
+$('memeTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  memeTab = b.dataset.tab;
+  store.set('memeTab', memeTab);
+  memeAll = false;
+  renderMemes();
+});
+$('memeMore').addEventListener('click', () => {
+  memeAll = !memeAll;
+  renderMemes();
+});
 
 function startMemes() {
   memeReadyAt = Date.now() + 8000; // no alerts for what is already moving when the page opens
@@ -1344,7 +1382,7 @@ function startMemes() {
     onSignal: (x, st) => {
       if (Date.now() < memeReadyAt) return;
       const what = { pump: 'is PUMPING (chasing pumps lost money in testing)', dump: 'is DUMPING', 'fade-short': 'FADE setup: first red candle after a pump (experimental)', 'fade-long': 'FADE setup: first green candle after a dump (experimental)' }[st.kind];
-      toast(`<b>${esc(x.name)}</b> ${what}`);
+      toast(`<b>${esc(x.name)}</b> ${x.venue === 'fut' ? '(futures) ' : ''}${what}`);
     },
   }).start();
 }
