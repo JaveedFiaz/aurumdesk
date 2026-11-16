@@ -74,6 +74,12 @@ The `copier/` folder copies gold signals (from a WhatsApp channel or pasted text
 onto an Exness MetaTrader 5 account, with risk sizing and safety limits. See
 [copier/README.md](copier/README.md).
 
+## TradingView indicator
+
+`tradingview/pulse-gold-sweep.pine` is a liquidity-sweep indicator for XAUUSD with
+a built-in results table and alerts the copier can trade. 3-year backtest and
+setup: [tradingview/README.md](tradingview/README.md).
+
 ## Run it
 
 Requires Node.js 20.12 or newer.

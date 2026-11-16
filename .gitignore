@@ -6,3 +6,4 @@ data/
 copier/config.json
 copier/copier_trades.csv
 copier/__pycache__/
+tradingview/data/
