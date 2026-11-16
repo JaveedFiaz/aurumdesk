@@ -19,6 +19,8 @@ automatically so you can track performance.
 - **Paper auto-trader.** Takes every setup from a proven strategy on both markets, sizes it to your risk %, and manages stop, target and time stop. Shows equity, win rate, profit factor, open trades and history.
 - **Track record.** The last 30 days of trades from the proven strategies on both markets, replayed as a $10,000 account at 1% risk, so you can see how the terminal is doing even right after the paper account resets.
 - **Always-on zones.** Up to two fresh buy zones (demand) below price and sell zones (supply) above stay on the chart; zones scoring 70+ and untouched order blocks are drawn with a glowing border as STRONG BUY/SELL ZONE; the setup guide card can be dragged anywhere.
+- **Zones ahead of price.** The next buy zone below and sell zone above (from the chart's timeframe and the 1H chart) are drawn before price gets there, each with a planned limit entry, stop and 2R target. A zone pulses when price is within one ATR of it.
+- **Memecoin radar.** Live pump/dump detection on 23 Binance memecoins from 1-minute volume, taker buy/sell flow and the order book. Tested on 14 days of data: pumps usually faded within the hour, so it shows when a coin is moving, not a buy signal; FADE setups are marked experimental.
 - **TradingView view.** A switch swaps in TradingView's own chart for the current market and timeframe.
 
 ## Strategies
