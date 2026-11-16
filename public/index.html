@@ -27,6 +27,22 @@
   <div id="banner" class="banner" hidden></div>
 
   <main class="layout">
+    <section class="card wide meme-market" id="memeMarket" style="--i:0">
+      <div class="mm-head">
+        <h2 id="mmTitle">Memecoins</h2>
+        <input id="mmSearch" class="mm-search" type="search" placeholder="Search coin" autocomplete="off" aria-label="Search memecoins">
+        <div class="seg" id="mmTfs" role="group" aria-label="Timeframe"><button type="button" data-tf="M5">5m</button><button type="button" data-tf="M15">15m</button><button type="button" data-tf="H1">1h</button></div>
+      </div>
+      <div class="mm-coins" id="mmCoins" role="group" aria-label="Memecoins"></div>
+      <div class="mm-body">
+        <div class="chart-wrap mm-chart-wrap"><div id="mmChart"></div><canvas id="mmOverlay"></canvas><div id="mmLoading" class="loading"><span class="spinner"></span>Loading…</div></div>
+        <aside class="mm-side">
+          <div id="mmSignal"></div>
+          <h3 class="mm-h3">Live memecoin signals <span id="mmScanMeta" class="meta"></span></h3>
+          <ol id="mmScan" class="list mm-scan"><li class="empty">Scanning memecoins…</li></ol>
+        </aside>
+      </div>
+    </section>
     <section class="card chart-card" style="--i:0">
       <div class="chart-head"><div class="bias" id="bias"></div><div class="layers" id="layers" role="group" aria-label="Chart layers"></div></div>
       <div class="chart-wrap">

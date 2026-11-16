@@ -19,7 +19,9 @@ export const COLORS = {
 };
 
 const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
-const fmt = (p) => p.toFixed(2);
+// Price decimals: 2 for gold and Bitcoin; set higher for tiny prices (memecoins).
+let DP = 2;
+const fmt = (p) => p.toFixed(DP);
 
 function lowerBound(candles, time) {
   let lo = 0;
@@ -33,7 +35,8 @@ function lowerBound(candles, time) {
 }
 
 export class Overlay {
-  constructor(container, canvas, chart, series) {
+  constructor(container, canvas, chart, series, { decimals = 2 } = {}) {
+    this.decimals = decimals;
     this.container = container;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
@@ -57,6 +60,7 @@ export class Overlay {
   }
 
   draw() {
+    DP = this.decimals;
     const d = this.data;
     const ts = this.chart.timeScale();
     const w = this.container.clientWidth;
@@ -231,8 +235,8 @@ export class Overlay {
         if (yS != null) this.hline(lx, right, yS, bull ? red(0.7) : red(0.7), [3, 4], 1);
         if (yT != null) this.hline(lx, right, yT, green(0.6), [3, 4], 1);
         if (yE != null) this.hline(lx, right, yE, bull ? green(0.9) : red(0.9), [], 1.5);
-        if (yS != null) this.tag(`SL ${a.plan.stop.toFixed(2)}`, lx + 4, yS + (bull ? 9 : -9), COLORS.bear, 'left', true);
-        if (yT != null) this.tag(`TP ${a.plan.target.toFixed(2)} · 2R`, lx + 4, yT + (bull ? -9 : 9), COLORS.bull, 'left', true);
+        if (yS != null) this.tag(`SL ${fmt(a.plan.stop)}`, lx + 4, yS + (bull ? 9 : -9), COLORS.bear, 'left', true);
+        if (yT != null) this.tag(`TP ${fmt(a.plan.target)} · 2R`, lx + 4, yT + (bull ? -9 : 9), COLORS.bull, 'left', true);
         if (a.near) {
           // Price is within one ATR of the entry: make the zone pulse.
           const ctx = this.ctx;
@@ -245,7 +249,7 @@ export class Overlay {
         }
       }
       const label = a.watch
-        ? `${a.near ? '⚡ ' : ''}${a.strong ? 'STRONG ' : ''}${a.plan ? 'NEXT ' : ''}${bull ? 'BUY ZONE' : 'SELL ZONE'}${a.src ? ` (${a.src})` : ''} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}${a.plan ? ` · ${bull ? 'buy' : 'sell'} limit ${a.plan.entry.toFixed(2)}` : ''}`
+        ? `${a.near ? '⚡ ' : ''}${a.strong ? 'STRONG ' : ''}${a.plan ? 'NEXT ' : ''}${bull ? 'BUY ZONE' : 'SELL ZONE'}${a.src ? ` (${a.src})` : ''} ${fmt(a.bottom)}–${fmt(a.top)} · ${a.kind}${a.plan ? ` · ${bull ? 'buy' : 'sell'} limit ${fmt(a.plan.entry)}` : ''}`
         : `${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`;
       this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch && !a.strong ? 'rgba(22,199,132,0.75)' : '#16c784') : (a.watch && !a.strong ? 'rgba(234,57,67,0.75)' : '#ea3943'), a.strong ? '#ffffff' : '#140a2e', 'right');
     }
@@ -255,7 +259,7 @@ export class Overlay {
       const i = idx(g.time);
       const x1 = Math.max(0, (i == null ? null : X(i)) ?? 0);
       this.hline(x1, right, Y(g.price), bull ? green(0.9) : red(0.9), [8, 4], 1.5);
-      this.pill(`${bull ? 'BUY above' : 'SELL below'} ${g.price.toFixed(2)} on a volume breakout`, right - 6, Y(g.price) + (bull ? -11 : 11), bull ? '#16c784' : '#ea3943', '#140a2e', 'right');
+      this.pill(`${bull ? 'BUY above' : 'SELL below'} ${fmt(g.price)} on a volume breakout`, right - 6, Y(g.price) + (bull ? -11 : 11), bull ? '#16c784' : '#ea3943', '#140a2e', 'right');
     }
 
     // Live setups, drawn like a long/short position tool anchored at the signal
@@ -307,7 +311,7 @@ export class Overlay {
       const steps = Math.max(1, Math.round(Math.abs(s.target - s.entry) / risk));
       for (let n = 1; n < steps; n++) this.hline(x0, x2, Y(s.entry + sign * n * risk), green(0.75), [4, 3], 1);
       if (ease < 1) continue;
-      const fx = (v) => v.toFixed(2);
+      const fx = fmt;
       const lx = x2 - 6;
       this.tag(`TARGET ${fx(s.target)}  ${bull ? '+' : '−'}${fx(Math.abs(s.target - s.entry))} · ${steps}R`, lx, yT + (bull ? 10 : -10), COLORS.bull, 'right', true);
       for (let n = 1; n < steps; n++) this.tag(`TP${n} ${fx(s.entry + sign * n * risk)} · ${n}R`, lx, Y(s.entry + sign * n * risk), COLORS.bull, 'right', true);

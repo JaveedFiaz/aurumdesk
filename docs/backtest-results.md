@@ -77,3 +77,21 @@ them profitable in both halves of the data:
 | London/NY opening-range breakout (2R) | 26, −0.18R | 3 trades | 47, −0.38R | 2 trades |
 
 They stay in the code for re-testing but are not traded or signalled.
+
+## Memecoins (Memecoins tab)
+
+1 year of 15-minute and 6 months of 5-minute Binance spot candles for 23 memecoins
+(DOGE, SHIB, PEPE, FLOKI, BONK, WIF, BOME, MEME, TURBO, NEIRO, PEOPLE, PNUT, ACT,
+1000SATS, DOGS, TRUMP, 1000CAT, 1MBABYDOGE, PENGU, BROCCOLI714, 1000CHEEMS, TST,
+MUBARAK), 0.1% round-trip cost, all hours. Every strategy at 0, 5/8 and 6/8
+confluence, results pooled across coins (`research/`):
+
+| Strategy (15m, 6/8+ confluence) | Target | Trades | Won | PF | Total | First 60% / last 40% | Coins profitable |
+|---|---|---|---|---|---|---|---|
+| **Trap + order flow** (traded) | 2R | 76 | 45% | 1.31 | +14.3R | +0.10R / +0.29R | 12 of 21 |
+| Trap with trend | 2R | 73 | 44% | 1.26 | +11.7R | +0.17R / +0.15R | 11 of 20 |
+| Trap + order flow | 1.5R | 76 | 50% | 1.20 | +8.4R | +0.04R / +0.20R | 14 of 21 |
+| Trap + order flow | 3R | 76 | 33% | 1.09 | +5.1R | -0.13R / +0.30R | 9 of 21 |
+
+Everything else (volume breakouts, zone retests and rejections, sweeps, EMA
+pullbacks, session sweeps, ...) lost money on memecoins or failed one half.

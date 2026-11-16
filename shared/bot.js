@@ -35,7 +35,8 @@ function closeTrade(t, bar, price, reason, rules) {
   t.exit = price;
   t.exitTime = bar.time;
   t.reason = reason;
-  t.r = (sign * (price - t.entry) - rules.cost) / t.risk;
+  // costPct (a share of price, for markets whose price moves a lot) or a fixed cost.
+  t.r = (sign * (price - t.entry) - (rules.costPct ? t.entry * rules.costPct : rules.cost)) / t.risk;
   t.status = 'closed';
 }
 
