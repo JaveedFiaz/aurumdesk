@@ -5,6 +5,7 @@ import { Overlay } from '/overlay.js';
 import { sessionsNow } from '/sessions.js';
 import { feed } from '/feed.js';
 import { binance, goldPerp } from '/live.js';
+import { createMemeRadar } from '/memes.js';
 import { deltaSeries, tradeFlow, whales as findWhales, bookStats } from '/shared/flow.js';
 import { $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, spark, deltaChart } from '/ui.js';
 
@@ -148,6 +149,15 @@ async function load({ soft = false } = {}) {
   const { market, tf } = state;
   const seq = ++state.seq;
   if (!soft) $('loading').hidden = false;
+  // A different market or timeframe: clear the chart so the old candles are never
+  // updated with the new market's prices while the new ones load.
+  if (!soft && state.chartKey !== `${market}:${tf}`) {
+    state.chartKey = null;
+    state.candles = [];
+    candleSeries.setData([]);
+    volumeSeries.setData([]);
+    candleSeries.setMarkers([]);
+  }
   try {
     const m = mk();
     if (m.spot && state.basis[market] == null) {
@@ -205,6 +215,7 @@ async function load({ soft = false } = {}) {
     state.live.shift = k;
     const range = soft ? chart.timeScale().getVisibleLogicalRange() : null;
     state.candles = candles;
+    state.chartKey = `${market}:${tf}`;
     state.surges = findSurges(candles);
     candleSeries.setData(candles.map(bar));
     volumeSeries.setData(volBars(candles, state.layers.surges ? state.surges : []));
@@ -214,6 +225,7 @@ async function load({ soft = false } = {}) {
     drawMarkers();
     $('banner').hidden = true;
     if (state.live.market !== market || state.live.tf !== tf) startLive();
+    if (!state.htf || state.htf.market !== market) loadHtf();
   } catch (e) {
     if (seq === state.seq) {
       $('banner').textContent = `Could not load ${mk().label} ${TF[tf].label} candles: ${e.message}`;
@@ -300,6 +312,7 @@ function volBar(c) {
 // The open candle from the exchange: volume and buyer volume always; prices
 // too, except for spot-priced markets whose candle follows the spot ticks.
 function onKline(k) {
+  if (state.chartKey !== `${state.live.market}:${state.live.tf}` || state.live.market !== state.market) return;
   const c = state.candles;
   const last = c[c.length - 1];
   if (!last) return;
@@ -441,28 +454,63 @@ function drawMarkers() {
   }));
 }
 
-// Buy and sell zones are always on the chart: the strategies' own areas, plus
-// the strongest fresh demand below price and supply above it (up to two per
-// side). Zones scoring 70+ (or untouched order blocks) are marked STRONG.
+// 1H structure for zones that sit ahead of price: they exist long before price
+// gets there, so the next buy and sell zones are known in advance.
+async function loadHtf() {
+  const { market } = state;
+  const m = mk();
+  try {
+    let raw = null;
+    if (m.goldChart) {
+      const g = await feed.gold('H1', 500).catch(() => null);
+      if (g && /perpetual/.test(g.source) && g.candles.length > 100) raw = g.candles;
+    }
+    if (!raw && m.binance) raw = (await binance.candles(m.binance, 'H1', 500)).map((c) => sh(c, basisOf(market)));
+    if (!raw) raw = (await feed.candles(market, 'H1', 500)).map((c) => sh(c, basisOf(market)));
+    if (market !== state.market || raw.length < 60) return;
+    state.htf = { market, result: analyze(raw.slice(0, -1), { tf: TF.H1 }) };
+    pushOverlay();
+    renderGuide();
+  } catch { /* the chart's own zones still show */ }
+}
+
+// Buy and sell zones are always on the chart, AHEAD of price: the strategies'
+// own areas, plus the nearest fresh demand below and supply above from this
+// timeframe and the 1H chart (up to two per side). Each comes with a plan: a
+// limit entry at the zone edge, a stop beyond the zone and a 2R target. Zones
+// scoring 70+ (60+ on 1H) and untouched order blocks are marked STRONG.
 function withZones(areas) {
   const r = state.result;
   const c = state.candles;
   if (!r || !c.length) return areas;
   const price = c[c.length - 1].close;
+  const A = r.atr || 0;
   const out = [...areas];
   const overlaps = (z) => out.some((a) => a.dir === z.side && z.bottom <= a.top && z.top >= a.bottom);
+  const h = state.htf && state.htf.market === state.market ? state.htf.result : null;
+  const pool = [
+    ...[...r.zones, ...r.orderBlocks].map((z) => ({ ...z, src: TF[state.tf].label, cap: 2.5 * A, strongAt: 70 })),
+    ...(h ? [...h.zones, ...h.orderBlocks].map((z) => ({ ...z, src: '1H', cap: 2 * (h.atr || 0), strongAt: 60 })) : []),
+  ];
   for (const dir of ['bull', 'bear']) {
     const bull = dir === 'bull';
-    [...r.zones, ...r.orderBlocks]
+    pool
       .filter((x) => x.side === dir && !x.broken && (bull ? x.top < price : x.bottom > price)
-        && !(r.atr > 0 && x.top - x.bottom > 2.5 * r.atr) && (x.score == null || x.score >= 50) && (x.touches ?? 0) <= 3)
+        && !(x.cap > 0 && x.top - x.bottom > x.cap) && (x.score == null || x.score >= 50) && (x.touches ?? 0) <= 3)
       .sort((x, y) => Math.abs((x.top + x.bottom) / 2 - price) - Math.abs((y.top + y.bottom) / 2 - price))
       .filter((z) => !overlaps(z))
       .slice(0, 2)
-      .forEach((z) => {
+      .forEach((z, n) => {
         if (overlaps(z)) return; // overlaps one added just before
         const ob = /OB/.test(z.kind);
-        out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, strong: ob ? !z.touches : z.score >= 70, score: z.score, kind: ob ? 'order block' : bull ? 'demand' : 'supply' });
+        const entry = bull ? z.top : z.bottom;
+        const stop = bull ? z.bottom - 0.25 * A : z.top + 0.25 * A;
+        const target = entry + (bull ? 2 : -2) * Math.abs(entry - stop);
+        out.push({
+          dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, src: z.src,
+          strong: ob ? !z.touches : z.score >= z.strongAt, score: z.score, kind: ob ? 'order block' : bull ? 'demand' : 'supply',
+          plan: { entry, stop, target }, primary: n === 0, near: A > 0 && Math.abs(price - entry) <= A,
+        });
       });
   }
   return out;
@@ -648,9 +696,12 @@ function onPrice(market, p, t = nowSec()) {
   el.textContent = fmt(p);
   if (prev != null && p !== prev) flash(el, p - prev);
   renderChange();
+  if (state.chartKey !== `${market}:${state.tf}`) return; // chart still loading this market
   const c = state.candles;
   const last = c[c.length - 1];
   if (!last) return;
+  // A price far from the chart is from another feed: never let it stretch the candles.
+  if (Math.abs(p / last.close - 1) > 0.05) return;
   const b = bucketStart(TF[state.tf], t);
   if (b === last.time) {
     last.high = Math.max(last.high, p);
@@ -851,9 +902,9 @@ function renderGuide() {
   const waits = plays.flatMap(([tf, t]) => [
     ...t.areas.map((a) => sh(a, k)).map((a) => ({ tf, dir: a.dir, text: `${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 })),
     ...t.triggers.map((g) => sh(g, k)).map((g) => ({ tf, dir: g.dir, text: `${g.dir === 'bull' ? 'BUY above' : 'SELL below'} ${fmt(g.price)}`, at: g.price })),
-  ]).concat(withZones([]).filter((a) => a.watch).map((a) => ({ tf: state.tf, dir: a.dir, text: `${a.strong ? 'STRONG ' : ''}${a.dir === 'bull' ? 'BUY ZONE' : 'SELL ZONE'} ${fmt(a.bottom)}–${fmt(a.top)}`, at: (a.top + a.bottom) / 2 }))).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
+  ]).concat(withZones([]).filter((a) => a.watch).map((a) => ({ tf: state.tf, src: a.src, dir: a.dir, text: `${a.strong ? 'STRONG ' : ''}${a.dir === 'bull' ? 'BUY' : 'SELL'} ZONE ${fmt(a.bottom)}–${fmt(a.top)}${a.plan ? ` · limit ${fmt(a.plan.entry)} SL ${fmt(a.plan.stop)} TP ${fmt(a.plan.target)}` : ''}`, at: a.plan ? a.plan.entry : (a.top + a.bottom) / 2 }))).filter((w) => Number.isFinite(price)).sort((x, y) => Math.abs(x.at - price) - Math.abs(y.at - price)).slice(0, 3);
   setGuide(el, `<div class="gh"><span>Waiting for a setup</span><span class="gs">${esc(mk().label)}</span></div>
-    ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`, 'guide');
+    ${waits.length ? `<div class="muted">Next possible trades, nearest first:</div>${waits.map((w) => `<div class="wz ${w.dir}"><span>${w.src || TF[w.tf].label} · ${w.text}</span><span class="muted">${signed(w.at - price)}</span></div>`).join('')}` : '<div class="muted">No zone or breakout level nearby. A box appears here and on the chart the moment a verified setup forms.</div>'}`, 'guide');
 }
 
 function flashSignal(s) {
@@ -1262,6 +1313,42 @@ function beep(freq = 700) {
   } catch { /* browsers block audio until the user interacts */ }
 }
 
+// ---- Memecoin radar -------------------------------------------------------------------
+
+const px = (p) => (p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(5) : p.toPrecision(4));
+const pc = (v) => (v == null || !Number.isFinite(v) ? '—' : `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`);
+let memeReadyAt = 0;
+function renderMemes(list) {
+  const rank = (x) => (x.status ? ({ pump: 5, dump: 5, 'fade-short': 4, 'fade-long': 4, 'heat-up': 3, 'heat-down': 3 }[x.status.kind] || 0) : 0);
+  const rows = list.filter((x) => x.metrics).sort((a, b) => rank(b) - rank(a) || b.metrics.volX * Math.abs(b.metrics.m5) - a.metrics.volX * Math.abs(a.metrics.m5));
+  if (!rows.length) return;
+  $('memeMeta').textContent = `Binance · live · ${rows.filter((x) => x.status && rank(x) >= 4).length} active`;
+  $('memeRows').innerHTML = rows.map((x) => {
+    const m = x.metrics;
+    const st = x.status;
+    const cls = (v) => (v >= 0 ? 'bull' : 'bear');
+    const plan = st?.plan ? `<small>entry ${px(st.plan.entry)} · SL ${px(st.plan.stop)} · TP ${px(st.plan.target)}</small>` : '';
+    return `<tr class="${st ? `sig-${st.kind}` : ''}"><td><b>${esc(x.name)}</b></td><td class="mono">${px(m.price)}</td>
+      <td class="mono ${cls(m.m5)}">${pc(m.m5)}</td><td class="mono ${cls(m.m60)}">${pc(m.m60)}</td><td class="mono ${cls(x.day?.change ?? 0)}">${pc(x.day?.change)}</td>
+      <td class="mono ${m.volX >= 3 ? 'hot' : ''}">${m.volX.toFixed(1)}×</td>
+      <td><div class="mbar"><i style="width:${(m.buy * 100).toFixed(0)}%"></i></div><span class="mono small">${(m.buy * 100).toFixed(0)}%</span></td>
+      <td class="mono ${x.book ? cls(x.book.imb) : ''}">${x.book ? `${x.book.imb >= 0 ? '+' : ''}${(x.book.imb * 100).toFixed(0)}%` : '—'}</td>
+      <td>${st ? `<span class="mbadge ${st.kind}">${st.text}</span>${plan}` : '<span class="muted small">—</span>'}</td></tr>`;
+  }).join('');
+}
+
+function startMemes() {
+  memeReadyAt = Date.now() + 8000; // no alerts for what is already moving when the page opens
+  createMemeRadar({
+    onUpdate: renderMemes,
+    onSignal: (x, st) => {
+      if (Date.now() < memeReadyAt) return;
+      const what = { pump: 'is PUMPING (chasing pumps lost money in testing)', dump: 'is DUMPING', 'fade-short': 'FADE setup: first red candle after a pump (experimental)', 'fade-long': 'FADE setup: first green candle after a dump (experimental)' }[st.kind];
+      toast(`<b>${esc(x.name)}</b> ${what}`);
+    },
+  }).start();
+}
+
 // ---- Boot -----------------------------------------------------------------------------
 
 async function boot() {
@@ -1283,6 +1370,7 @@ async function boot() {
   load(); // fetches the spot-gold basis itself when it is not known yet
   loadDayOpen();
   loadNews();
+  startMemes();
   loadPaper();
   const dot = $('liveDot');
   feed.subscribe((d) => {
@@ -1314,6 +1402,7 @@ async function boot() {
   setInterval(loadPaper, 3000);
   setInterval(() => load({ soft: true }), 60000);
   setInterval(loadDayOpen, 5 * 60000);
+  setInterval(loadHtf, 5 * 60000);
   setInterval(renderPills, 30000);
   setInterval(() => { if (state.news) $('events').querySelectorAll('.event b.mono').forEach((el, i) => { el.textContent = countdown(state.news.events[i].time); }); }, 1000);
 }

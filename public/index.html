@@ -73,6 +73,13 @@
     <section class="card" style="--i:5"><h2>Liquidity <span id="liqMeta" class="meta"></span></h2><div id="liq" class="stack"></div></section>
     <section class="card" style="--i:6"><h2>News <span id="newsMeta" class="meta"></span></h2><div id="events" class="events"></div><ol id="news" class="list news"></ol></section>
 
+    <section class="card wide memes" style="--i:7">
+      <h2>Memecoin radar <span id="memeMeta" class="meta">Binance · live</span></h2>
+      <p class="meme-note">Live pump and dump detection on 23 Binance memecoins from 1-minute volume, taker buy/sell flow and the order book.
+        <b>Tested on the last 14 days:</b> after a PUMP, price was lower one hour later 70–80% of the time, and chasing pumps lost money.
+        FADE setups (the first candle against a 3%+ move) made a small profit, but on only 28 trades: experimental, not proven. Memecoins can move 20% in minutes.</p>
+      <div class="meme-wrap"><table class="meme-table"><thead><tr><th>Coin</th><th>Price</th><th>5m</th><th>1h</th><th>24h</th><th title="Volume of the last 3 minutes vs the hour's average">Vol ×</th><th title="Share of volume from aggressive buyers (last 3 minutes)">Buyers</th><th title="Order book, top 10 levels: bids vs asks">Book</th><th>Signal</th></tr></thead><tbody id="memeRows"><tr><td colspan="9" class="muted">Connecting to Binance…</td></tr></tbody></table></div>
+    </section>
     <section class="card wide track" style="--i:7"><h2>Track record <span id="trackMeta" class="meta"></span></h2><div id="track" class="track-body"></div></section>
     <section class="card wide" style="--i:7"><h2>Strategy scoreboard <span id="scoreMeta" class="meta"></span></h2><div id="score" class="score"></div></section>
     <section class="card wide" style="--i:8"><h2>Trade history <span class="meta">paper account</span></h2><ol id="history" class="history"></ol></section>

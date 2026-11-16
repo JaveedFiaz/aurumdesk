@@ -197,6 +197,7 @@ export class Overlay {
     }
 
     const hasLive = !!(t.live && t.live.length);
+    this._near = false;
     for (const a of (t.areas || []).filter((x) => !(hasLive && x.watch))) {
       const bull = a.dir === 'bull';
       const i = idx(a.time);
@@ -221,8 +222,30 @@ export class Overlay {
         ctx.restore();
       } else this.box(x1, right, yt, yb, 'rgba(0,0,0,0)', bull ? green(a.watch ? 0.5 : 0.85) : red(a.watch ? 0.5 : 0.85), true);
       if (a.stop != null) this.hline(x1, right, Y(a.stop), bull ? red(0.6) : green(0.6), [4, 4], 1);
+      // A planned trade at the zone: limit entry, stop and target drawn ahead of price.
+      if (a.plan && a.primary) {
+        const lx = lastX != null ? lastX + 6 : x1;
+        const yS = Y(a.plan.stop);
+        const yT = Y(a.plan.target);
+        const yE = Y(a.plan.entry);
+        if (yS != null) this.hline(lx, right, yS, bull ? red(0.7) : red(0.7), [3, 4], 1);
+        if (yT != null) this.hline(lx, right, yT, green(0.6), [3, 4], 1);
+        if (yE != null) this.hline(lx, right, yE, bull ? green(0.9) : red(0.9), [], 1.5);
+        if (yS != null) this.tag(`SL ${a.plan.stop.toFixed(2)}`, lx + 4, yS + (bull ? 9 : -9), COLORS.bear, 'left', true);
+        if (yT != null) this.tag(`TP ${a.plan.target.toFixed(2)} · 2R`, lx + 4, yT + (bull ? -9 : 9), COLORS.bull, 'left', true);
+        if (a.near) {
+          // Price is within one ATR of the entry: make the zone pulse.
+          const ctx = this.ctx;
+          ctx.save();
+          ctx.globalAlpha = 0.25 + 0.25 * Math.sin(performance.now() / 300);
+          ctx.fillStyle = bull ? green(0.5) : red(0.5);
+          ctx.fillRect(x1, Math.min(yt, yb), right - x1, Math.max(2, Math.abs(yb - yt)));
+          ctx.restore();
+          this._near = true; // keep animating
+        }
+      }
       const label = a.watch
-        ? `${a.strong ? 'STRONG ' : ''}${bull ? 'BUY ZONE' : 'SELL ZONE'} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}${a.score != null ? ` ${a.score}` : ''}`
+        ? `${a.near ? '⚡ ' : ''}${a.strong ? 'STRONG ' : ''}${a.plan ? 'NEXT ' : ''}${bull ? 'BUY ZONE' : 'SELL ZONE'}${a.src ? ` (${a.src})` : ''} ${a.bottom.toFixed(2)}–${a.top.toFixed(2)} · ${a.kind}${a.plan ? ` · ${bull ? 'buy' : 'sell'} limit ${a.plan.entry.toFixed(2)}` : ''}`
         : `${bull ? 'BUY ZONE' : 'SELL ZONE'} · wait for a ${bull ? 'rejection up' : 'rejection down'}`;
       this.pill(label, right - 6, (bull ? yt : yb) + (bull ? -11 : 11), bull ? (a.watch && !a.strong ? 'rgba(22,199,132,0.75)' : '#16c784') : (a.watch && !a.strong ? 'rgba(234,57,67,0.75)' : '#ea3943'), a.strong ? '#ffffff' : '#140a2e', 'right');
     }
@@ -243,7 +266,7 @@ export class Overlay {
       this.liveKey = key;
       if (key) this.animStart = performance.now();
     }
-    this.hasLive = !!(t.live && t.live.length);
+    this.hasLive = !!(t.live && t.live.length) || this._near;
     this.boxFrom = null;
     const now = performance.now();
     const k = Math.min(1, (now - (this.animStart || 0)) / 900);
