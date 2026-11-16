@@ -9,6 +9,8 @@
 //   Fading the biggest moves (3%+ in 5 min) after the first candle against them
 //   made a small profit (PF 1.25-1.39) but on only 28 trades: experimental.
 
+import { buildUniverse } from '../shared/memeuniverse.js'; // resolves to /shared/ in the browser
+
 const REST = 'https://data-api.binance.vision/api/v3';
 const WS = 'wss://data-stream.binance.vision/stream?streams=';
 
@@ -126,7 +128,21 @@ export function createMemeRadar({ onUpdate, onSignal }) {
     let u = null;
     try {
       u = await getJSON('/api/memes');
-    } catch { /* fallback list below */ }
+    } catch { /* built in the browser below */ }
+    // The server could not get Binance's lists (its shared address is often rate
+    // limited): build them here, from this browser's own connection to Binance.
+    if (!u || !u.futures?.length || !u.spot?.length) {
+      const [spotInfo, futInfo] = await Promise.all([
+        getJSON(`${REST}/exchangeInfo?permissions=SPOT`).catch(() => null),
+        getJSON('https://fapi.binance.com/fapi/v1/exchangeInfo').catch(() => null),
+      ]);
+      const mine = buildUniverse({ spotInfo, futInfo, products: null });
+      u = {
+        spot: u?.spot?.length ? u.spot : mine.spot,
+        futures: u?.futures?.length ? u.futures : mine.futures,
+        fresh: u?.fresh?.length ? u.fresh : mine.fresh,
+      };
+    }
     const before = coins.size;
     add(u?.spot?.length ? u.spot : MEME_COINS.map((n) => ({ symbol: `${n}USDT`, name: n })), 'spot');
     add(u?.futures || [], 'fut');
