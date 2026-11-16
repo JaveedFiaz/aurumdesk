@@ -329,3 +329,40 @@ button, input, select { font: inherit; color: inherit; }
 .meme-table .venue.fut { background: rgba(196, 181, 253, .2); color: #c4b5fd; }
 .meme-table .newb { margin-left: 4px; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: #ffd27a; color: #140a2e; }
 #memeMore { justify-self: start; }
+
+/* Memecoins market (third tab) */
+.meme-market { display: none; }
+body.meme-mode .meme-market { display: flex; }
+body.meme-mode main.layout > section:not(.meme-market):not(.memes) { display: none; }
+body.meme-mode .top .quote, body.meme-mode #tfs, body.meme-mode #views, body.meme-mode #pills { display: none; }
+.mm-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mm-head h2 { margin: 0; font-size: 18px; letter-spacing: .3px; text-transform: none; color: var(--text); }
+.mm-search { flex: 1 1 160px; max-width: 240px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, .06); color: var(--text); font: 500 13px var(--font); }
+.mm-coins { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.mm-coins button { all: unset; cursor: pointer; flex: 0 0 auto; padding: 5px 11px; border-radius: 999px; background: var(--chip); font: 700 12px var(--font); color: var(--muted); }
+.mm-coins button[aria-pressed="true"] { background: var(--text); color: #140a2e; }
+.mm-coins button i { font-style: normal; }
+.mm-coins button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.mm-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
+.mm-chart-wrap { position: relative; height: 520px; }
+.mm-chart-wrap #mmChart { position: absolute; inset: 0; }
+.mm-chart-wrap canvas { position: absolute; inset: 0; pointer-events: none; }
+.mm-side { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.mm-sig { display: grid; gap: 6px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); font-size: 12px; }
+.mm-sig.bull { border-color: rgba(22, 199, 132, .7); box-shadow: 0 0 24px -8px rgba(22, 199, 132, .7); }
+.mm-sig.bear { border-color: rgba(234, 57, 67, .7); box-shadow: 0 0 24px -8px rgba(234, 57, 67, .7); }
+.mm-sig .gh { display: flex; justify-content: space-between; gap: 8px; font-weight: 800; font-size: 15px; }
+.mm-sig .gs { font-size: 10px; font-weight: 800; letter-spacing: .6px; color: var(--muted); }
+.mm-sig .gr { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; font-family: var(--mono); }
+.mm-sig .gr span { font: 700 10px var(--font); letter-spacing: .5px; color: var(--muted); }
+.mm-sig .gr i { font-style: normal; font-weight: 800; }
+.mm-sig .gconf { display: grid; gap: 3px; }
+.mm-sig .gconf ul { margin: 0; padding: 0; list-style: none; font-size: 11px; }
+.mm-sig .gconf li.no { color: var(--faint); }
+.mm-stats { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.mm-stats b { color: var(--text); }
+.mm-h3 { margin: 4px 0 0; font-size: 11px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); }
+.mm-scan { max-height: 260px; overflow-y: auto; }
+.mm-scan li button { all: unset; cursor: pointer; display: grid; gap: 2px; width: 100%; padding: 6px 8px; border-radius: 10px; }
+.mm-scan li button:hover, .mm-scan li button:focus-visible { background: rgba(255, 255, 255, .06); }
+@media (max-width: 900px) { .mm-body { grid-template-columns: 1fr; } .mm-chart-wrap { height: 420px; } }

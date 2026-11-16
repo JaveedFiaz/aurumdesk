@@ -5,7 +5,8 @@ import { Overlay } from '/overlay.js';
 import { sessionsNow } from '/sessions.js';
 import { feed } from '/feed.js';
 import { binance, goldPerp } from '/live.js';
-import { createMemeRadar } from '/memes.js';
+import { createMemeRadar, MEME_COINS } from '/memes.js';
+import { createMemeMarket } from '/mememarket.js';
 import { deltaSeries, tradeFlow, whales as findWhales, bookStats } from '/shared/flow.js';
 import { $, esc, fmt, money, signed, compact, pct, ago, clock, tween, flash, ring, animateRings, spark, deltaChart } from '/ui.js';
 
@@ -590,8 +591,8 @@ function renderHeader() {
   $('mtabs').innerHTML = state.cfg.markets.map((m) => {
     const b = state.bots[m.id];
     const sig = b ? Object.values(b.tfs).flatMap((t) => t.signals || []).find((s) => s.status === 'pending' || s.status === 'open') : null;
-    return `<button type="button" data-m="${m.id}" aria-pressed="${m.id === state.market}">${esc(m.label)}<span class="p" id="mp-${m.id}">${fmt(state.prices[m.id])}</span>${sig ? `<span class="sig ${sig.dir}">${sig.dir === 'bull' ? 'BUY' : 'SELL'}</span>` : ''}</button>`;
-  }).join('');
+    return `<button type="button" data-m="${m.id}" aria-pressed="${!memeMode && m.id === state.market}">${esc(m.label)}<span class="p" id="mp-${m.id}">${fmt(state.prices[m.id])}</span>${sig ? `<span class="sig ${sig.dir}">${sig.dir === 'bull' ? 'BUY' : 'SELL'}</span>` : ''}</button>`;
+  }).join('') + `<button type="button" data-m="meme" aria-pressed="${memeMode}">Memecoins<span class="sig bull" id="mmTabBadge"></span></button>`;
   $('tfs').innerHTML = TFS.map((t) => `<button type="button" data-tf="${t}" aria-pressed="${t === state.tf}">${TF[t].label}</button>`).join('');
   $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   $('layers').innerHTML = LAYERS.map((l) => `<button type="button" data-layer="${l.id}" aria-pressed="${!!state.layers[l.id]}">${l.label}</button>`).join('');
@@ -640,7 +641,10 @@ function switchTo(market, tf) {
 
 $('mtabs').addEventListener('click', (e) => {
   const m = e.target.closest('button')?.dataset.m;
-  if (m) switchTo(m, state.tf);
+  if (!m) return;
+  if (m === 'meme') return setMemeMode(true);
+  if (memeMode) setMemeMode(false);
+  switchTo(m, state.tf);
 });
 $('tfs').addEventListener('click', (e) => {
   const tf = e.target.closest('button')?.dataset.tf;
@@ -1313,6 +1317,36 @@ function beep(freq = 700) {
   } catch { /* browsers block audio until the user interacts */ }
 }
 
+// ---- Memecoins market (next to Gold and Bitcoin) ---------------------------------------
+
+let memeMode = store.get('mode', 'markets') === 'meme';
+let memeMarket = null;
+const memeCoinsForMarket = () => {
+  const spot = memeList.filter((x) => x.venue === 'spot').map((x) => ({ symbol: x.symbol, name: x.name, vol: x.day?.quoteVolume || 0 }));
+  const list = spot.length ? spot : MEME_COINS.map((n) => ({ symbol: `${n}USDT`, name: n, vol: 0 }));
+  return list.sort((a, b) => b.vol - a.vol);
+};
+function setMemeMode(on) {
+  memeMode = on;
+  store.set('mode', on ? 'meme' : 'markets');
+  document.body.classList.toggle('meme-mode', on);
+  renderHeader();
+  if (on) {
+    if (!memeMarket) {
+      memeMarket = createMemeMarket({
+        LC,
+        locale: safeLocale(),
+        getCoins: memeCoinsForMarket,
+        onSignal: (x, t) => {
+          toast(`<b>${esc(x.name)}</b> ${t.dir === 'bull' ? 'LONG' : 'SHORT'} setup (memecoin trap + order flow)`);
+          beep(t.dir === 'bull' ? 660 : 440);
+        },
+      });
+    }
+    memeMarket.start(memeCoinsForMarket()[0]);
+  }
+}
+
 // ---- Memecoin radar -------------------------------------------------------------------
 
 const px = (p) => (p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(5) : p.toPrecision(4));
@@ -1322,7 +1356,9 @@ let memeList = [];
 let memeTab = store.get('memeTab', 'fut');
 let memeAll = false;
 function renderMemes(list = memeList) {
+  const firstList = !memeList.length && list.length;
   memeList = list;
+  if (firstList && memeMarket) memeMarket.renderCoins();
   const rank = (x) => (x.status ? ({ pump: 5, dump: 5, 'fade-short': 4, 'fade-long': 4, 'heat-up': 3, 'heat-down': 3 }[x.status.kind] || 0) : 0);
   const tabs = {
     fut: (x) => x.venue === 'fut' && x.meme,
@@ -1332,14 +1368,17 @@ function renderMemes(list = memeList) {
   };
   for (const [t, id] of [['fut', 'mtFut'], ['spot', 'mtSpot'], ['new', 'mtNew'], ['signals', 'mtSig']]) $(id).textContent = list.filter(tabs[t]).length;
   document.querySelectorAll('#memeTabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === memeTab));
-  const sel = list.filter(tabs[memeTab]);
+  // No futures coins (Binance Futures unreachable): show spot instead of an empty tab.
+  const tab = memeTab === 'fut' && !list.some(tabs.fut) ? 'spot' : memeTab;
+  document.querySelectorAll('#memeTabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  const sel = list.filter(tabs[tab]);
   const rows = sel.filter((x) => x.metrics).sort((a, b) => rank(b) - rank(a) || b.metrics.volX * Math.abs(b.metrics.m5) - a.metrics.volX * Math.abs(a.metrics.m5));
   $('memeMeta').textContent = `Binance · live · ${list.length} coins · ${list.filter((x) => rank(x) >= 4).length} active signals`;
   const shown = memeAll ? rows : rows.slice(0, 40);
   $('memeMore').hidden = rows.length <= 40;
   $('memeMore').textContent = memeAll ? 'Show top 40' : `Show all ${rows.length}`;
   if (!rows.length) {
-    $('memeRows').innerHTML = `<tr><td colspan="11" class="muted">${sel.length ? 'Loading candles…' : memeTab === 'signals' ? 'No pump, dump or fade setup right now.' : 'None found yet.'}</td></tr>`;
+    $('memeRows').innerHTML = `<tr><td colspan="11" class="muted">${sel.length ? 'Loading candles…' : tab === 'signals' ? 'No pump, dump or fade setup right now.' : 'None found yet.'}</td></tr>`;
     return;
   }
   const age = (t) => { const d = (Date.now() - t) / 86400000; return d < 1 ? `${Math.max(1, Math.round(d * 24))}h` : `${Math.round(d)}d`; };
@@ -1409,6 +1448,7 @@ async function boot() {
   loadDayOpen();
   loadNews();
   startMemes();
+  if (memeMode) setMemeMode(true);
   loadPaper();
   const dot = $('liveDot');
   feed.subscribe((d) => {

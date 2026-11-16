@@ -673,7 +673,7 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
     const s = CHECKS[id](ctx);
     if (!s) continue;
     const risk = Math.abs(s.entry - s.stop);
-    if (!(risk >= rules.minStopAtr * a[L] && risk <= rules.maxStopAtr * a[L] && risk >= 3 * rules.cost)) continue;
+    if (!(risk >= rules.minStopAtr * a[L] && risk <= rules.maxStopAtr * a[L] && risk >= 3 * (rules.costPct ? s.entry * rules.costPct : rules.cost))) continue;
     const sign = s.dir === 'bull' ? 1 : -1;
     const rr = rules.rrBy?.[id] ?? STRATEGY_BY_ID[id]?.rr ?? rules.rr;
     out.push({ ...s, strategy: id, time: bar.time, rr, target: s.entry + sign * rr * risk });
