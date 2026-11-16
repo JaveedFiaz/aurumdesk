@@ -28,6 +28,7 @@ terminal already open and logged in on the same PC.
 | `max_open_signals` | `2` | At most 2 signals open at once |
 | `breakeven_after_tp1` | `true` | Move stops to entry once TP1 is reached |
 | `symbols` | XAUUSD, XAUUSDm, ... | Exness gold symbol names; the first one on your account is used |
+| `feed_url` | empty | Pulse Scalper signal feed to follow (see below) |
 | `token` | empty | Set a password-like value when phones send signals over Wi-Fi |
 
 Duplicate signals (same side, entry and stop within 6 hours) are ignored. Every
@@ -44,6 +45,21 @@ order is written to `copier_trades.csv`.
 
 Keep the PC (and MT5) running while you want signals copied. A Windows VPS
 (about $5-10 a month) keeps it running 24/7.
+
+## Trading the terminal's own signals (no WhatsApp needed)
+
+The Pulse Scalper server publishes every new setup from its proven strategies at
+`/api/signals`. Set in `config.json`:
+
+```
+"feed_url": "https://aurumdesk-zhni.onrender.com/api/signals?market=gold"
+```
+
+and the copier polls it every 3 seconds and trades each new gold setup: one
+position with the strategy's own stop and target (its backtests did better with
+a single target than with split TPs and stop-to-entry). Only setups published
+after the copier starts are traded. You can use the feed and WhatsApp signals at
+the same time.
 
 ## Getting signals from the WhatsApp channel automatically
 

@@ -13,5 +13,7 @@
   "host": "127.0.0.1",
   "port": 8787,
   "token": "",
-  "log_file": "copier_trades.csv"
+  "log_file": "copier_trades.csv",
+  "feed_url": "",
+  "feed_poll_sec": 3
 }
