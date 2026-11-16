@@ -9,7 +9,7 @@
 //   Fading the biggest moves (3%+ in 5 min) after the first candle against them
 //   made a small profit (PF 1.25-1.39) but on only 28 trades: experimental.
 
-import { buildUniverse } from '../shared/memeuniverse.js'; // resolves to /shared/ in the browser
+import { buildUniverse, coinOf, FUT_FALLBACK, NEW_DAYS } from '../shared/memeuniverse.js'; // resolves to /shared/ in the browser
 
 const REST = 'https://data-api.binance.vision/api/v3';
 const WS = 'wss://data-stream.binance.vision/stream?streams=';
@@ -88,6 +88,44 @@ const VENUE = {
 
 // Coins come from the server's /api/memes (found automatically on Binance):
 // spot memecoins, futures memecoins, and every futures listing of the last 3 weeks.
+// Last resort for the futures list: every perpetual's ticker arrives once a
+// second on Binance's futures stream. Memes are matched by coin name; a symbol
+// never seen before in this browser is shown as a NEW listing for 3 weeks.
+function futuresFromStream(spotCoins) {
+  return new Promise((resolve) => {
+    let ws;
+    const done = (list) => {
+      try { ws?.close(); } catch { /* closed */ }
+      resolve(list);
+    };
+    const timer = setTimeout(() => done({ futures: [], fresh: [] }), 8000);
+    try {
+      ws = new WebSocket('wss://fstream.binance.com/ws/!miniTicker@arr');
+    } catch {
+      clearTimeout(timer);
+      resolve({ futures: [], fresh: [] });
+      return;
+    }
+    ws.onmessage = (e) => {
+      clearTimeout(timer);
+      const syms = JSON.parse(e.data).map((t) => t.s).filter((s) => /USDT$/.test(s));
+      let seen = {};
+      try { seen = JSON.parse(localStorage.getItem('scalper4:futSeen') || '{}'); } catch { /* storage off */ }
+      const first = !Object.keys(seen).length;
+      const now = Date.now();
+      for (const s of syms) if (!(s in seen)) seen[s] = first ? 0 : now;
+      try { localStorage.setItem('scalper4:futSeen', JSON.stringify(seen)); } catch { /* storage off */ }
+      const memes = new Set([...spotCoins, ...FUT_FALLBACK]);
+      const row = (s) => ({ symbol: s, name: s.replace(/USDT$/, ''), coin: coinOf(s.replace(/USDT$/, '')) });
+      done({
+        futures: syms.map(row).filter((x) => memes.has(x.coin)),
+        fresh: syms.filter((s) => seen[s] > now - NEW_DAYS * 86400000).map((s) => ({ ...row(s), onboard: seen[s], meme: memes.has(row(s).coin) })),
+      });
+    };
+    ws.onerror = () => { clearTimeout(timer); done({ futures: [], fresh: [] }); };
+  });
+}
+
 export function createMemeRadar({ onUpdate, onSignal }) {
   const coins = new Map(); // key -> coin
   const sockets = [];
@@ -137,6 +175,7 @@ export function createMemeRadar({ onUpdate, onSignal }) {
         getJSON('https://fapi.binance.com/fapi/v1/exchangeInfo').catch(() => null),
       ]);
       const mine = buildUniverse({ spotInfo, futInfo, products: null });
+      if (!futInfo) Object.assign(mine, await futuresFromStream(new Set(mine.spot.map((x) => x.coin))));
       u = {
         spot: u?.spot?.length ? u.spot : mine.spot,
         futures: u?.futures?.length ? u.futures : mine.futures,

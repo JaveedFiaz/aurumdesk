@@ -9,6 +9,11 @@ export const NEW_DAYS = 21;
 export const FALLBACK = ['DOGE', 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'BOME', 'MEME', 'TURBO', 'NEIRO', 'PEOPLE', 'PNUT', 'ACT',
   '1000SATS', 'DOGS', 'TRUMP', '1000CAT', '1MBABYDOGE', 'PENGU', 'BROCCOLI714', '1000CHEEMS', 'TST', 'MUBARAK'];
 
+// Known futures memecoins, used when Binance's category list cannot be read.
+export const FUT_FALLBACK = ['DOGE', 'PEPE', 'SHIB', 'FLOKI', 'BONK', 'WIF', 'BOME', 'MEME', 'TURBO', 'NEIRO', 'PEOPLE', 'PNUT', 'ACT', 'SATS', 'RATS',
+  'DOGS', 'TRUMP', 'MELANIA', 'CAT', 'CHEEMS', 'BABYDOGE', 'PENGU', 'BROCCOLI714', 'TST', 'MUBARAK', 'POPCAT', 'MEW', 'BRETT', 'GOAT', 'MOODENG',
+  'FARTCOIN', 'SPX', 'MOG', 'WHY', 'X', 'PIPPIN', 'CHILLGUY', 'BAN', 'MYRO', 'SLERF', 'PONKE', 'HMSTR', 'CATI', 'NOT', 'DEGEN', 'LADYS', 'BOBO', 'NEIROETH'];
+
 // "1000PEPE" -> "PEPE", "1MBABYDOGE" -> "BABYDOGE", "1000000MOG" -> "MOG".
 export const coinOf = (base) => base.replace(/^(1000000|1000|1M)(?=[A-Z])/, '');
 
