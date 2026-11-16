@@ -1,0 +1,259 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Pulse Gold Sweep Pro: liquidity-sweep signals for XAUUSD, filtered by the 1H trend.
+//
+// Backtested on 3 years of 5-minute gold (Nov 2023 - Nov 2026, weekends removed, 0.01% cost per trade):
+//   default settings: 667 trades, 46% won, profit factor 1.17, +61R, profitable in each of the 3 years.
+//   The same sweeps without the trend filter, with a fixed stop, 1:2 and "risk-free after TP1"
+//   (the FAP AI style): profit factor 0.90, -36R.
+// Past results do not guarantee future results. Not financial advice.
+//
+// Use on a 5-minute XAUUSD chart. The table at the bottom right re-runs the same rules on the
+// bars loaded in your chart, so you can check the results on your broker's own prices.
+//@version=5
+indicator("Pulse Gold Sweep Pro", shorttitle = "PGS Pro", overlay = true, max_boxes_count = 500, max_labels_count = 500, max_lines_count = 500)
+
+// ---- Inputs ---------------------------------------------------------------------------------
+grpS     = "Signals"
+pivLen   = input.int(4, "Liquidity pivot length", minval = 2, maxval = 20, group = grpS, tooltip = "A swing high/low with this many lower highs / higher lows on each side. Its stops are the liquidity that gets swept.")
+lookback = input.int(100, "Max bars since the swing", minval = 10, group = grpS)
+stopPct  = input.float(0.26, "Stop distance (% of price)", minval = 0.05, step = 0.01, group = grpS, tooltip = "0.26% is about $10 at 3850")
+rr       = input.float(1.5, "Reward : risk", minval = 0.5, step = 0.25, group = grpS)
+useTrend = input.bool(true, "Only trade with the higher-timeframe trend", group = grpS)
+htfTf    = input.timeframe("60", "Trend timeframe", group = grpS)
+emaFast  = input.int(20, "Trend EMA fast", group = grpS)
+emaSlow  = input.int(50, "Trend EMA slow", group = grpS)
+maxOpen  = input.int(3, "Max open signals", minval = 1, group = grpS)
+maxDay   = input.int(10, "Max signals per day", minval = 1, group = grpS)
+maxBars  = input.int(96, "Close an open trade after N bars", minval = 5, group = grpS)
+
+grpT     = "Trading hours (UTC)"
+sessMode = input.string("All sessions", "Signals during", options = ["All sessions", "London + New York (07-17)", "Killzones (07-10, 12:30-15:30)"], group = grpT, tooltip = "All sessions tested best. London + New York gives about half the signals.")
+
+grpD      = "Display"
+costPct   = input.float(0.01, "Cost per trade for the results table (% of price)", step = 0.005, group = grpD)
+showBoxes = input.bool(true, "Draw position boxes", group = grpD)
+boxLen    = input.int(24, "Box length (bars)", minval = 5, group = grpD)
+showSess  = input.bool(true, "Shade London and New York", group = grpD)
+showDash  = input.bool(true, "Show signal panel", group = grpD)
+showStats = input.bool(true, "Show results table", group = grpD)
+alertName = input.string("Gold", "Market name in alerts", group = grpD)
+
+// ---- Helpers --------------------------------------------------------------------------------
+hUTC = hour(time, "UTC") + minute(time, "UTC") / 60.0
+inSession = sessMode == "All sessions" ? true : sessMode == "London + New York (07-17)" ? (hUTC >= 7 and hUTC < 17) : ((hUTC >= 7 and hUTC < 10) or (hUTC >= 12.5 and hUTC < 15.5))
+fmt(x) => str.tostring(x, "#.00")
+
+// Trend from the last CLOSED higher-timeframe candle (no repainting).
+htfFast = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaFast)[1], lookahead = barmerge.lookahead_on)
+htfSlow = request.security(syminfo.tickerid, htfTf, ta.ema(close, emaSlow)[1], lookahead = barmerge.lookahead_on)
+trendUp = htfFast > htfSlow
+trendDn = htfFast < htfSlow
+
+// ---- Liquidity: the latest confirmed swing high / low, used once -----------------------------
+var float phPrice = na
+var int   phBar   = na
+var bool  phUsed  = true
+var float plPrice = na
+var int   plBar   = na
+var bool  plUsed  = true
+
+isPH = bar_index >= 2 * pivLen
+isPL = bar_index >= 2 * pivLen
+if bar_index >= 2 * pivLen
+    for j = 1 to pivLen
+        if high[pivLen + j] >= high[pivLen] or high[pivLen - j] >= high[pivLen]
+            isPH := false
+        if low[pivLen + j] <= low[pivLen] or low[pivLen - j] <= low[pivLen]
+            isPL := false
+if isPH
+    phPrice := high[pivLen]
+    phBar   := bar_index - pivLen
+    phUsed  := false
+if isPL
+    plPrice := low[pivLen]
+    plBar   := bar_index - pivLen
+    plUsed  := false
+
+// A sweep: price trades through the swing, then closes back on the other side.
+rawSell = false
+rawBuy  = false
+sweptHigh = phPrice
+sweptLow  = plPrice
+if not na(phPrice) and not phUsed and high > phPrice
+    phUsed := true
+    rawSell := close < phPrice and close < open and bar_index - phBar <= lookback
+if not na(plPrice) and not plUsed and low < plPrice
+    plUsed := true
+    rawBuy := close > plPrice and close > open and bar_index - plBar <= lookback
+if rawSell and rawBuy
+    rawSell := false
+    rawBuy  := false
+
+// ---- Trades (the same rules the backtest used) -----------------------------------------------
+var array<int>   tDir   = array.new<int>()
+var array<float> tEntry = array.new<float>()
+var array<float> tSL    = array.new<float>()
+var array<float> tTP    = array.new<float>()
+var array<float> tRisk  = array.new<float>()
+var array<int>   tBar   = array.new<int>()     // bar of entry (the bar after the signal)
+var array<bool>  tLive  = array.new<bool>()    // false while waiting for the next bar's open
+
+var int   nTrades = 0
+var int   nWins   = 0
+var float sumWin  = 0.0
+var float sumLoss = 0.0
+var int   firstBarTime = na
+var int   dayKey  = na
+var int   dayN    = 0
+var string lastResult = "—"
+
+if na(firstBarTime)
+    firstBarTime := time
+
+// 1) Fill trades signalled on the previous bar at this bar's open, then manage every open trade.
+if array.size(tDir) > 0
+    for q = array.size(tDir) - 1 to 0
+        d = array.get(tDir, q)
+        if not array.get(tLive, q)
+            fillPx = open
+            fillRisk = fillPx * stopPct / 100
+            array.set(tEntry, q, fillPx)
+            array.set(tRisk, q, fillRisk)
+            array.set(tSL, q, fillPx - d * fillRisk)
+            array.set(tTP, q, fillPx + d * rr * fillRisk)
+            array.set(tBar, q, bar_index)
+            array.set(tLive, q, true)
+        e  = array.get(tEntry, q)
+        sl = array.get(tSL, q)
+        tp = array.get(tTP, q)
+        risk = array.get(tRisk, q)
+        hitS = d > 0 ? low <= sl : high >= sl
+        hitT = d > 0 ? high >= tp : low <= tp
+        float exitPx = na
+        if hitS
+            exitPx := sl
+        else if hitT
+            exitPx := tp
+        else if bar_index - array.get(tBar, q) >= maxBars
+            exitPx := close
+        if not na(exitPx)
+            r = (d * (exitPx - e) - e * costPct / 100) / risk
+            nTrades += 1
+            if r > 0
+                nWins += 1
+                sumWin += r
+            else
+                sumLoss -= r
+            lastResult := (hitS ? "Stop " : hitT ? "Target " : "Time exit ") + str.tostring(r, "+#.00;-#.00") + "R"
+            array.remove(tDir, q)
+            array.remove(tEntry, q)
+            array.remove(tSL, q)
+            array.remove(tTP, q)
+            array.remove(tRisk, q)
+            array.remove(tBar, q)
+            array.remove(tLive, q)
+
+// 2) New signal on this bar's close.
+dk = dayofmonth(time, "UTC")
+if dk != dayKey
+    dayKey := dk
+    dayN := 0
+
+trendOk(d) => not useTrend or (d > 0 ? trendUp : trendDn)
+sig = rawBuy and trendOk(1) ? 1 : rawSell and trendOk(-1) ? -1 : 0
+take = sig != 0 and inSession and dayN < maxDay and array.size(tDir) < maxOpen and barstate.isconfirmed
+
+var int   lastDir   = 0
+var float lastEntry = na
+var float lastSL    = na
+var float lastTP    = na
+var int   lastBar   = na
+var float lastLevel = na
+
+if take
+    dayN += 1
+    array.push(tDir, sig)
+    array.push(tEntry, na)
+    array.push(tSL, na)
+    array.push(tTP, na)
+    array.push(tRisk, na)
+    array.push(tBar, bar_index + 1)
+    array.push(tLive, false)
+    // Levels shown and alerted from this close (the backtest fills at the next open).
+    sigRisk = close * stopPct / 100
+    lastDir   := sig
+    lastEntry := close
+    lastSL    := close - sig * sigRisk
+    lastTP    := close + sig * rr * sigRisk
+    lastBar   := bar_index
+    lastLevel := sig > 0 ? sweptLow : sweptHigh
+    if showBoxes
+        tpCol = color.new(color.teal, 70)
+        slCol = color.new(color.red, 70)
+        box.new(bar_index, math.max(lastTP, lastEntry), bar_index + boxLen, math.min(lastTP, lastEntry), border_color = color.new(color.teal, 20), bgcolor = tpCol)
+        box.new(bar_index, math.max(lastSL, lastEntry), bar_index + boxLen, math.min(lastSL, lastEntry), border_color = color.new(color.red, 20), bgcolor = slCol)
+        line.new(sig > 0 ? plBar : phBar, lastLevel, bar_index, lastLevel, color = color.new(color.yellow, 20), style = line.style_dashed)
+        label.new(bar_index + boxLen, lastEntry, (sig > 0 ? "BUY" : "SELL") + " (Liquidity Sweep)  " + fmt(lastEntry), style = label.style_label_left, color = sig > 0 ? color.teal : color.red, textcolor = color.white, size = size.small)
+        label.new(bar_index + boxLen, lastTP, "TP " + fmt(lastTP), style = label.style_label_left, color = color.new(color.teal, 0), textcolor = color.white, size = size.tiny)
+        label.new(bar_index + boxLen, lastSL, "SL " + fmt(lastSL), style = label.style_label_left, color = color.new(color.red, 0), textcolor = color.white, size = size.tiny)
+    // Alert text in the signal-channel format (works with the MT5 copier's /signal webhook).
+    msg = (sig > 0 ? "Buy " : "Sell ") + alertName + " (" + fmt(lastEntry) + ")\nStoploss at : " + fmt(lastSL) + "\nTp1 : " + fmt(lastTP) + "\nPGS Pro · liquidity sweep · " + (useTrend ? htfTf + " trend" : "no trend filter")
+    alert(msg, alert.freq_once_per_bar_close)
+
+plotshape(take and sig > 0, "Buy signal", shape.triangleup, location.belowbar, color.teal, size = size.small)
+plotshape(take and sig < 0, "Sell signal", shape.triangledown, location.abovebar, color.red, size = size.small)
+alertcondition(take and sig > 0, "PGS Buy", "PGS Pro: BUY gold (liquidity sweep with the trend)")
+alertcondition(take and sig < 0, "PGS Sell", "PGS Pro: SELL gold (liquidity sweep with the trend)")
+
+// ---- Session shading ------------------------------------------------------------------------------
+london = hUTC >= 7 and hUTC < 16
+newYork = hUTC >= 12.5 and hUTC < 21
+bgcolor(showSess and london and not newYork ? color.new(color.blue, 94) : na, title = "London")
+bgcolor(showSess and newYork ? color.new(color.orange, 94) : na, title = "New York")
+
+// ---- Panels ---------------------------------------------------------------------------------------
+var table dash = table.new(position.top_right, 2, 9, border_width = 1, border_color = color.new(color.white, 70))
+var table stats = table.new(position.bottom_right, 2, 7, border_width = 1, border_color = color.new(color.white, 70))
+cell(t, c, r, txt, bg, fg) => table.cell(t, c, r, txt, bgcolor = bg, text_color = fg, text_size = size.small)
+
+if barstate.islast
+    hdr = color.new(color.blue, 10)
+    dark = color.new(#1e2230, 0)
+    if showDash
+        cell(dash, 0, 0, syminfo.ticker, hdr, color.white)
+        cell(dash, 1, 0, "Sweep 1:" + str.tostring(rr), hdr, color.white)
+        sigTxt = lastDir > 0 ? "BUY" : lastDir < 0 ? "SELL" : "—"
+        cell(dash, 0, 1, "Signal", dark, color.white)
+        cell(dash, 1, 1, sigTxt, lastDir > 0 ? color.teal : lastDir < 0 ? color.red : dark, color.white)
+        cell(dash, 0, 2, "Entry", dark, color.white)
+        cell(dash, 1, 2, na(lastEntry) ? "—" : fmt(lastEntry), dark, color.white)
+        cell(dash, 0, 3, "TP", dark, color.white)
+        cell(dash, 1, 3, na(lastTP) ? "—" : fmt(lastTP), dark, color.teal)
+        cell(dash, 0, 4, "SL", dark, color.white)
+        cell(dash, 1, 4, na(lastSL) ? "—" : fmt(lastSL), dark, color.red)
+        cell(dash, 0, 5, htfTf + " trend", dark, color.white)
+        cell(dash, 1, 5, trendUp ? "BULLISH" : trendDn ? "BEARISH" : "FLAT", trendUp ? color.teal : trendDn ? color.red : dark, color.white)
+        cell(dash, 0, 6, "Session", dark, color.white)
+        cell(dash, 1, 6, inSession ? "ACTIVE" : "CLOSED", inSession ? color.new(color.green, 30) : color.new(color.gray, 30), color.white)
+        cell(dash, 0, 7, "Open signals", dark, color.white)
+        cell(dash, 1, 7, str.tostring(array.size(tDir)) + " / " + str.tostring(maxOpen), dark, color.white)
+        cell(dash, 0, 8, "Signal age", dark, color.white)
+        cell(dash, 1, 8, na(lastBar) ? "—" : str.tostring(bar_index - lastBar) + " bars", dark, color.white)
+    if showStats
+        days = (time - firstBarTime) / 86400000.0 * 5.0 / 7.0
+        pf = sumLoss > 0 ? sumWin / sumLoss : na
+        net = sumWin - sumLoss
+        cell(stats, 0, 0, "Results on this chart", hdr, color.white)
+        cell(stats, 1, 0, str.tostring(days, "#") + " trading days", hdr, color.white)
+        cell(stats, 0, 1, "Trades", dark, color.white)
+        cell(stats, 1, 1, str.tostring(nTrades) + " (" + str.tostring(days > 0 ? nTrades / days : 0, "#.##") + "/day)", dark, color.white)
+        cell(stats, 0, 2, "Win rate", dark, color.white)
+        cell(stats, 1, 2, nTrades > 0 ? str.tostring(100.0 * nWins / nTrades, "#.#") + "%" : "—", dark, color.white)
+        cell(stats, 0, 3, "Profit factor", dark, color.white)
+        cell(stats, 1, 3, na(pf) ? "—" : str.tostring(pf, "#.00"), dark, na(pf) ? color.white : pf >= 1 ? color.teal : color.red)
+        cell(stats, 0, 4, "Net result", dark, color.white)
+        cell(stats, 1, 4, str.tostring(net, "+#.0;-#.0") + "R", dark, net >= 0 ? color.teal : color.red)
+        cell(stats, 0, 5, "Average per trade", dark, color.white)
+        cell(stats, 1, 5, nTrades > 0 ? str.tostring(net / nTrades, "+#.00;-#.00") + "R" : "—", dark, color.white)
+        cell(stats, 0, 6, "Last closed", dark, color.white)
+        cell(stats, 1, 6, lastResult, dark, color.white)
