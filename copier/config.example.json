@@ -1,0 +1,17 @@
+{
+  "live": false,
+  "symbols": ["XAUUSD", "XAUUSDm", "XAUUSDc", "XAUUSDz"],
+  "risk_pct": 1.0,
+  "fixed_lots_per_tp": 0,
+  "use_tps": [1, 2, 3, 4, 5],
+  "max_slippage": 2.0,
+  "max_daily_loss_pct": 5.0,
+  "max_open_signals": 2,
+  "breakeven_after_tp1": true,
+  "deviation_points": 50,
+  "magic": 880711,
+  "host": "127.0.0.1",
+  "port": 8787,
+  "token": "",
+  "log_file": "copier_trades.csv"
+}

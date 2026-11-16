@@ -68,6 +68,12 @@ Bitcoin has no proven 1m or 5m strategy yet.
 - **Access:** set `ADMIN_TOKEN` so only you can change settings when the site is public.
 - **Real money:** orders go through a broker object (`paperBroker` in `shared/autotrader.js`). A live broker implements the same `fill()` call.
 
+## Signal copier (Exness MT5)
+
+The `copier/` folder copies gold signals (from a WhatsApp channel or pasted text)
+onto an Exness MetaTrader 5 account, with risk sizing and safety limits. See
+[copier/README.md](copier/README.md).
+
 ## Run it
 
 Requires Node.js 20.12 or newer.
