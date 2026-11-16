@@ -50,6 +50,8 @@ DEFAULTS = {
     "port": 8787,
     "token": "",                   # required in requests when set (?token=... or X-Token header)
     "log_file": "copier_trades.csv",
+    "feed_url": "",                # e.g. https://aurumdesk-zhni.onrender.com/api/signals?market=gold
+    "feed_poll_sec": 3,
 }
 
 NUM = r"(\d+(?:\.\d+)?)"
@@ -347,6 +349,35 @@ def make_handler(copier, mt5):
     return Handler
 
 
+def poll_feed(copier, fetch=None, once=False, since=None):
+    """Takes new signals from the Pulse Scalper server (its /api/signals feed).
+    Only signals published after the copier started are traded."""
+    import urllib.request
+
+    def get(url):
+        with urllib.request.urlopen(url, timeout=10) as r:
+            return json.loads(r.read().decode())
+
+    fetch = fetch or get
+    url = copier.cfg["feed_url"]
+    while True:
+        try:
+            sep = "&" if "?" in url else "?"
+            data = fetch(f"{url}{sep}since={since or 0}")
+            if since is None:
+                since = data.get("now", 0)  # skip anything older than the start
+            else:
+                for s in data.get("signals", []):
+                    since = max(since, s.get("time", 0))
+                    copier.note(f"Feed: {s.get('text', '').splitlines()[0]}")
+                    copier.handle(s.get("text", ""))
+        except Exception as e:  # network hiccups: try again on the next poll
+            copier.note(f"Feed error: {e}")
+        if once:
+            return since
+        time.sleep(copier.cfg["feed_poll_sec"])
+
+
 def main():
     import MetaTrader5 as mt5  # Windows only: pip install MetaTrader5
 
@@ -372,6 +403,9 @@ def main():
             time.sleep(2)
 
     threading.Thread(target=loop, daemon=True).start()
+    if copier.cfg["feed_url"]:
+        threading.Thread(target=poll_feed, args=(copier,), daemon=True).start()
+        print(f"Following the signal feed {copier.cfg['feed_url']}")
     srv = ThreadingHTTPServer((copier.cfg["host"], copier.cfg["port"]), make_handler(copier, mt5))
     print(f"Paste signals at http://localhost:{copier.cfg['port']}  (POST text to /signal)")
     srv.serve_forever()

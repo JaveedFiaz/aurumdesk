@@ -215,6 +215,7 @@ export function createApp({
     try {
       st.live = analyze(c, closedOf(x, play.htf), playOpts(x, tf, { now: Date.now() / 1000, prior: st.full }));
       const pause = newsPause ? news.pauseReason() : null;
+      for (const sg of st.live.signals) if (sg.status === 'pending') publish(x, tf, sg);
       for (const sg of st.live.signals) if (sg.status === 'pending') log(`${x.m.label} ${tf} setup: ${sg.dir === 'bull' ? 'BUY' : 'SELL'} ${sg.strategy} entry ${sg.entry.toFixed(2)} stop ${sg.stop.toFixed(2)} target ${sg.target.toFixed(2)}`);
       paper.onSignals(st.live.signals, prices[x.m.id] ?? c.at(-1)?.close, { id: x.m.id, label: x.m.label, costBps: x.m.costBps, step: x.m.id === 'btc' ? 0.0001 : 0.01 }, { pause });
     } catch (e) {
@@ -348,6 +349,25 @@ export function createApp({
   }
   const ready = autoStart ? boot() : Promise.resolve();
 
+  // Feed of new tradable setups, in the same text format as the signal
+  // channels, for the MT5 copier (copier/copier.py with "feed_url").
+  const feedList = [];
+  function publish(x, tf, sg) {
+    const id = `${x.m.id}:${tf}:${sg.strategy}:${sg.signalTime}`;
+    if (feedList.some((f) => f.id === id)) return;
+    const k = basis[x.m.id] ?? 0;
+    const r2 = (v) => Math.round((v + k) * 100) / 100;
+    const name = x.m.id === 'gold' ? 'Gold' : x.m.label;
+    const entry = r2(sg.entry);
+    const item = {
+      id, market: x.m.id, tf, strategy: sg.strategy, dir: sg.dir, time: Math.floor(Date.now() / 1000),
+      entry, stop: r2(sg.stop), target: r2(sg.target),
+      text: `${sg.dir === 'bull' ? 'Buy' : 'Sell'} ${name} (${entry})\nStoploss at : ${r2(sg.stop)}\nTp1 : ${r2(sg.target)}\nPulse Scalper · ${tf} · ${sg.strategy}${sg.factors ? ` · confluence ${sg.factors.filter((f) => f.ok).length}/${sg.factors.length}` : ''}`,
+    };
+    feedList.push(item);
+    if (feedList.length > 100) feedList.splice(0, feedList.length - 100);
+  }
+
   function botView(x) {
     const tfs = {};
     for (const [tf, st] of Object.entries(x.plays)) {
@@ -480,6 +500,11 @@ export function createApp({
         if (!goldCandles) return send(res, 404, { error: 'No real-time gold chart feed' });
         const limit = Math.max(10, Math.min(1000, parseInt(q.get('limit'), 10) || 600));
         return send(res, 200, await goldCandles.get(q.get('tf') || 'M1', limit, spotPrice.gold ?? null));
+      }
+      if (url.pathname === '/api/signals') {
+        const since = +q.get('since') || 0;
+        const mk = q.get('market');
+        return send(res, 200, { now: Math.floor(Date.now() / 1000), signals: feedList.filter((f) => f.time > since && (!mk || f.market === mk)) });
       }
       if (url.pathname === '/api/bot') return send(res, 200, botView(market()));
       if (url.pathname === '/api/flow') {

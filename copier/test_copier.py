@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace as NS
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from copier import Copier, parse_signal, plan_volumes, lots_for_risk  # noqa: E402
+from copier import Copier, parse_signal, plan_volumes, lots_for_risk, poll_feed  # noqa: E402
 
 SIGNAL = """Sell Gold (3866.725)
 🔴Stoploss at : 3876.725
@@ -145,6 +145,25 @@ class CopierTest(unittest.TestCase):
         c.manage()
         self.assertEqual(len([s for s in mt5.sent if s["action"] == mt5.TRADE_ACTION_SLTP]), 5)  # only once
 
+    def test_feed_takes_only_new_signals(self):
+        c, mt5 = self.make(feed_url="http://x/api/signals")
+        text = "Sell Gold (3866.6)\nStoploss at : 3870.6\nTp1 : 3858.6\nPulse Scalper · M15 · vol_breakout"
+        # First poll: whatever is already in the feed is old and skipped.
+        since = poll_feed(c, fetch=lambda u: {"now": 100, "signals": [{"time": 90, "text": SIGNAL}]}, once=True)
+        self.assertEqual(since, 100)
+        self.assertEqual(mt5.sent, [])
+        # Next poll: a new signal is traded (one TP -> one position).
+        urls = []
+
+        def fetch(u):
+            urls.append(u)
+            return {"now": 130, "signals": [{"time": 120, "text": text}]}
+        since = poll_feed(c, fetch=fetch, once=True, since=since)
+        self.assertIn("since=100", urls[0])
+        self.assertEqual(since, 120)
+        deals = [s for s in mt5.sent if s["action"] == mt5.TRADE_ACTION_DEAL]
+        self.assertEqual(len(deals), 1)
+        self.assertEqual((deals[0]["sl"], deals[0]["tp"]), (3870.6, 3858.6))
 
 if __name__ == "__main__":
     unittest.main()
