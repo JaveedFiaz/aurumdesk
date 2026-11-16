@@ -319,3 +319,13 @@ button, input, select { font: inherit; color: inherit; }
 .mbadge.dump { background: var(--bear); color: #fff; }
 .mbadge.fade-short, .mbadge.fade-long { background: #c4b5fd; color: #140a2e; }
 .mbadge.heat-up, .mbadge.heat-down { background: rgba(255, 210, 122, .2); color: #ffd27a; border: 1px solid rgba(255, 210, 122, .5); }
+.meme-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.meme-tabs button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 999px; background: var(--chip); font-size: 12px; font-weight: 700; color: var(--muted); }
+.meme-tabs button b { margin-left: 4px; color: var(--text); font-family: var(--mono); }
+.meme-tabs button.on { background: var(--text); color: #140a2e; }
+.meme-tabs button.on b { color: #140a2e; }
+.meme-tabs button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.meme-table .venue { margin-left: 6px; font-size: 9px; font-weight: 800; letter-spacing: .5px; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .1); color: var(--muted); }
+.meme-table .venue.fut { background: rgba(196, 181, 253, .2); color: #c4b5fd; }
+.meme-table .newb { margin-left: 4px; font-size: 9px; font-weight: 800; padding: 1px 5px; border-radius: 4px; background: #ffd27a; color: #140a2e; }
+#memeMore { justify-self: start; }

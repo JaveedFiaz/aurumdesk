@@ -79,105 +79,237 @@ export function memeStatus(c, m) {
 
 const kline = (k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], buyVolume: +k[9] });
 
+const VENUE = {
+  spot: { rest: `${REST}/klines`, ws: WS },
+  fut: { rest: 'https://fapi.binance.com/fapi/v1/klines', ws: 'wss://fstream.binance.com/stream?streams=' },
+};
+
+// Coins come from the server's /api/memes (found automatically on Binance):
+// spot memecoins, futures memecoins, and every futures listing of the last 3 weeks.
 export function createMemeRadar({ onUpdate, onSignal }) {
-  const coins = Object.fromEntries(MEME_COINS.map((s) => [s, { symbol: `${s}USDT`, name: s, candles: [], book: null, day: null, status: null, metrics: null }]));
-  let ws = null;
+  const coins = new Map(); // key -> coin
+  const sockets = [];
   let stopped = false;
   let dirty = false;
-  let timer = null;
+  let futDirect = null; // can this browser reach Binance Futures itself?
+  const timers = [];
 
-  async function loadHistory() {
-    await Promise.all(Object.values(coins).map(async (x) => {
+  const getJSON = async (url) => {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return res.json();
+  };
+  // Futures REST: straight from Binance when it answers, else through the server.
+  async function fut(path, proxy) {
+    if (futDirect !== false) {
       try {
-        const res = await fetch(`${REST}/klines?symbol=${x.symbol}&interval=1m&limit=90`);
-        if (res.ok) x.candles = (await res.json()).map(kline);
-      } catch { /* fills in from the stream */ }
-    }));
-    dirty = true;
+        const j = await getJSON(`https://fapi.binance.com${path}`);
+        futDirect = true;
+        return j;
+      } catch {
+        if (futDirect == null) futDirect = false;
+      }
+    }
+    return getJSON(proxy);
+  }
+
+  function add(list, venue, extra = {}) {
+    for (const c of list) {
+      const key = `${venue}:${c.symbol}`;
+      const x = coins.get(key);
+      if (x) Object.assign(x, extra);
+      else coins.set(key, { key, venue, symbol: c.symbol, name: c.name, onboard: c.onboard || null, candles: [], book: null, day: null, status: null, metrics: null, funding: null, oi1h: null, isNew: false, meme: c.meme !== false, ...extra });
+    }
+  }
+
+  async function loadUniverse() {
+    let u = null;
+    try {
+      u = await getJSON('/api/memes');
+    } catch { /* fallback list below */ }
+    const before = coins.size;
+    add(u?.spot?.length ? u.spot : MEME_COINS.map((n) => ({ symbol: `${n}USDT`, name: n })), 'spot');
+    add(u?.futures || [], 'fut');
+    for (const c of u?.fresh || []) add([c], 'fut', { isNew: true, meme: !!c.meme });
+    return coins.size !== before;
+  }
+
+  async function loadHistory(list) {
+    const queue = [...list];
+    const worker = async () => {
+      while (queue.length) {
+        const x = queue.shift();
+        try {
+          const rows = x.venue === 'spot'
+            ? await getJSON(`${REST}/klines?symbol=${x.symbol}&interval=1m&limit=90`)
+            : await fut(`/fapi/v1/klines?symbol=${x.symbol}&interval=1m&limit=90`, `/api/fut/klines?symbol=${x.symbol}&limit=90`);
+          x.candles = rows.map(kline);
+          dirty = true;
+        } catch { /* fills in from the stream */ }
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
   }
 
   async function loadTickers() {
+    const spot = [...coins.values()].filter((x) => x.venue === 'spot');
+    for (let i = 0; i < spot.length; i += 100) {
+      try {
+        const syms = encodeURIComponent(JSON.stringify(spot.slice(i, i + 100).map((x) => x.symbol)));
+        for (const t of await getJSON(`${REST}/ticker/24hr?symbols=${syms}`)) {
+          const x = coins.get(`spot:${t.symbol}`);
+          if (x) x.day = { change: +t.priceChangePercent / 100, quoteVolume: +t.quoteVolume };
+        }
+      } catch { /* next pass */ }
+    }
+    const futs = [...coins.values()].filter((x) => x.venue === 'fut');
+    if (!futs.length) return;
     try {
-      const syms = encodeURIComponent(JSON.stringify(Object.values(coins).map((x) => x.symbol)));
-      const res = await fetch(`${REST}/ticker/24hr?symbols=${syms}`);
-      if (!res.ok) return;
-      for (const t of await res.json()) {
-        const x = Object.values(coins).find((c) => c.symbol === t.symbol);
-        if (x) x.day = { change: +t.priceChangePercent / 100, quoteVolume: +t.quoteVolume };
+      const all = await fut('/fapi/v1/premiumIndex', '/api/fut/premium');
+      for (const p of all) {
+        const x = coins.get(`fut:${p.symbol}`);
+        if (x) x.funding = +p.lastFundingRate;
       }
-      dirty = true;
     } catch { /* next pass */ }
+    try {
+      const day = await fut('/fapi/v1/ticker/24hr', '/api/fut/ticker');
+      if (Array.isArray(day)) for (const t of day) {
+        const x = coins.get(`fut:${t.symbol}`);
+        if (x && t.priceChangePercent != null) x.day = { change: +t.priceChangePercent / 100, quoteVolume: +t.quoteVolume };
+      }
+    } catch { /* 24h change from the candles only */ }
+    dirty = true;
+  }
+
+  // Open interest change over the last hour (futures), a few coins per pass.
+  let oiAt = 0;
+  async function loadOI() {
+    const futs = [...coins.values()].filter((x) => x.venue === 'fut');
+    for (let n = 0; n < 8 && futs.length; n++) {
+      const x = futs[oiAt++ % futs.length];
+      try {
+        const h = await fut(`/futures/data/openInterestHist?symbol=${x.symbol}&period=5m&limit=13`, `/api/fut/oi?symbol=${x.symbol}`);
+        if (h.length >= 2) x.oi1h = +h[h.length - 1].sumOpenInterest / +h[0].sumOpenInterest - 1;
+      } catch { /* next pass */ }
+    }
+    dirty = true;
+  }
+
+  function onMessage(venue, msg) {
+    const d = msg.data;
+    if (!d) return;
+    const x = coins.get(`${venue}:${msg.stream.split('@')[0].toUpperCase()}`);
+    if (!x) return;
+    if (d.e === 'kline') {
+      const k = d.k;
+      const bar = { time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v, buyVolume: +k.V };
+      const c = x.candles;
+      if (c.length && c[c.length - 1].time === bar.time) c[c.length - 1] = bar;
+      else if (!c.length || bar.time > c[c.length - 1].time) {
+        c.push(bar);
+        if (c.length > 120) c.splice(0, c.length - 100);
+      }
+    } else {
+      const bids = d.bids || d.b;
+      const asks = d.asks || d.a;
+      if (!bids || !asks) return;
+      const sum = (side) => side.reduce((t, [p, q]) => t + +p * +q, 0);
+      const bid = sum(bids);
+      const ask = sum(asks);
+      x.book = { bid, ask, imb: bid + ask > 0 ? (bid - ask) / (bid + ask) : 0 };
+    }
+    dirty = true;
+  }
+
+  // Futures candles by polling the server when the browser's futures stream is blocked.
+  let pollAt = 0;
+  async function pollFutures() {
+    const futs = [...coins.values()].filter((x) => x.venue === 'fut');
+    for (let n = 0; n < 10 && futs.length; n++) {
+      const x = futs[pollAt++ % futs.length];
+      try {
+        x.candles = (await getJSON(`/api/fut/klines?symbol=${x.symbol}&limit=90`)).map(kline);
+        dirty = true;
+      } catch { /* next pass */ }
+    }
   }
 
   function connect() {
-    const streams = Object.values(coins).flatMap((x) => [`${x.symbol.toLowerCase()}@kline_1m`, `${x.symbol.toLowerCase()}@depth10@1000ms`]);
-    let delay = 1000;
-    const open = () => {
-      if (stopped) return;
-      try {
-        ws = new WebSocket(WS + streams.join('/'));
-      } catch {
-        return;
-      }
-      ws.onopen = () => { delay = 1000; };
-      ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-        const d = msg.data;
-        const name = msg.stream.split('@')[0].toUpperCase().replace(/USDT$/, '');
-        const x = coins[name];
-        if (!x || !d) return;
-        if (d.e === 'kline') {
-          const k = d.k;
-          const bar = { time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v, buyVolume: +k.V };
-          const c = x.candles;
-          if (c.length && c[c.length - 1].time === bar.time) c[c.length - 1] = bar;
-          else if (!c.length || bar.time > c[c.length - 1].time) {
-            c.push(bar);
-            if (c.length > 120) c.splice(0, c.length - 100);
+    sockets.splice(0).forEach((w) => { w.closed = true; w.ws?.close(); });
+    for (const venue of ['spot', 'fut']) {
+      const list = [...coins.values()].filter((x) => x.venue === venue);
+      const streams = list.flatMap((x) => [`${x.symbol.toLowerCase()}@kline_1m`, `${x.symbol.toLowerCase()}@depth10@${venue === 'fut' ? 500 : 1000}ms`]);
+      for (let i = 0; i < streams.length; i += 100) {
+        const w = { closed: false, ws: null, got: false };
+        sockets.push(w);
+        let delay = 1000;
+        const open = () => {
+          if (stopped || w.closed) return;
+          try {
+            w.ws = new WebSocket(VENUE[venue].ws + streams.slice(i, i + 100).join('/'));
+          } catch {
+            return;
           }
-        } else if (d.bids) {
-          const sum = (side) => side.reduce((t, [p, q]) => t + +p * +q, 0);
-          const bid = sum(d.bids);
-          const ask = sum(d.asks);
-          x.book = { bid, ask, imb: bid + ask > 0 ? (bid - ask) / (bid + ask) : 0 };
+          w.ws.onopen = () => { delay = 1000; };
+          w.ws.onmessage = (e) => {
+            w.got = true;
+            onMessage(venue, JSON.parse(e.data));
+          };
+          w.ws.onclose = () => {
+            if (stopped || w.closed) return;
+            setTimeout(open, delay);
+            delay = Math.min(delay * 2, 30000);
+          };
+          w.ws.onerror = () => w.ws.close();
+        };
+        open();
+        if (venue === 'fut') {
+          // No futures data from the stream after 12 s: poll through the server instead.
+          setTimeout(() => {
+            if (!w.got && !w.closed && !timers.pollFut) timers.pollFut = setInterval(pollFutures, 4000);
+          }, 12000);
         }
-        dirty = true;
-      };
-      ws.onclose = () => {
-        if (stopped) return;
-        setTimeout(open, delay);
-        delay = Math.min(delay * 2, 30000);
-      };
-      ws.onerror = () => ws.close();
-    };
-    open();
+      }
+    }
   }
 
   function evaluate() {
     if (!dirty) return;
     dirty = false;
-    for (const x of Object.values(coins)) {
+    for (const x of coins.values()) {
       x.metrics = memeMetrics(x.candles);
       const st = memeStatus(x.candles, x.metrics);
       const was = x.status?.kind;
       x.status = st;
       if (st && st.kind !== was && ['pump', 'dump', 'fade-short', 'fade-long'].includes(st.kind)) onSignal?.(x, st);
     }
-    onUpdate?.(Object.values(coins));
+    onUpdate?.([...coins.values()]);
+  }
+
+  async function refreshUniverse() {
+    const before = new Set(coins.keys());
+    if (await loadUniverse()) {
+      await loadHistory([...coins.values()].filter((x) => !before.has(x.key)));
+      connect();
+      loadTickers();
+    }
   }
 
   return {
     async start() {
-      await Promise.all([loadHistory(), loadTickers()]);
+      await loadUniverse();
+      onUpdate?.([...coins.values()]);
+      await Promise.all([loadHistory([...coins.values()]), loadTickers()]);
       connect();
-      timer = setInterval(evaluate, 1000);
-      setInterval(loadTickers, 60000);
+      timers.push(setInterval(evaluate, 1000), setInterval(loadTickers, 60000), setInterval(loadOI, 20000), setInterval(refreshUniverse, 30 * 60000));
+      loadOI();
       evaluate();
     },
     stop() {
       stopped = true;
-      clearInterval(timer);
-      ws?.close();
+      timers.forEach(clearInterval);
+      clearInterval(timers.pollFut);
+      sockets.forEach((w) => { w.closed = true; w.ws?.close(); });
     },
   };
 }

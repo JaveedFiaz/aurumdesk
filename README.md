@@ -20,7 +20,7 @@ automatically so you can track performance.
 - **Track record.** The last 30 days of trades from the proven strategies on both markets, replayed as a $10,000 account at 1% risk, so you can see how the terminal is doing even right after the paper account resets.
 - **Always-on zones.** Up to two fresh buy zones (demand) below price and sell zones (supply) above stay on the chart; zones scoring 70+ and untouched order blocks are drawn with a glowing border as STRONG BUY/SELL ZONE; the setup guide card can be dragged anywhere.
 - **Zones ahead of price.** The next buy zone below and sell zone above (from the chart's timeframe and the 1H chart) are drawn before price gets there, each with a planned limit entry, stop and 2R target. A zone pulses when price is within one ATR of it.
-- **Memecoin radar.** Live pump/dump detection on 23 Binance memecoins from 1-minute volume, taker buy/sell flow and the order book. Tested on 14 days of data: pumps usually faded within the hour, so it shows when a coin is moving, not a buy signal; FADE setups are marked experimental.
+- **Memecoin radar.** Live pump/dump detection on Binance memecoins, found automatically: futures contracts in Binance's Meme category, spot memecoins, and every futures contract listed in the last 3 weeks. 1-minute volume, taker buy/sell flow, order book, and for futures the funding rate and open-interest change. Tested on 14 days of data: pumps usually faded within the hour, so it shows when a coin is moving, not a buy signal; FADE setups are marked experimental.
 - **TradingView view.** A switch swaps in TradingView's own chart for the current market and timeframe.
 
 ## Strategies
