@@ -9,7 +9,8 @@ const IV = { M1: '1m', M5: '5m', M15: '15m', H1: '1h', D1: '1d' };
 const kline = (k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5], buyVolume: +k[9] });
 
 async function get(path) {
-  const res = await fetch(`${REST}${path}`);
+  // A stalled request falls back to the server after 8 s instead of leaving the chart empty.
+  const res = await fetch(`${REST}${path}`, { signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`Binance ${res.status}`);
   return res.json();
 }

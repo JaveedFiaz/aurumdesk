@@ -231,8 +231,10 @@ async function load({ soft = false } = {}) {
     if (!state.htf || state.htf.market !== market) loadHtf();
   } catch (e) {
     if (seq === state.seq) {
-      $('banner').textContent = `Could not load ${mk().label} ${TF[tf].label} candles: ${e.message}`;
+      $('banner').textContent = `Could not load ${mk().label} ${TF[tf].label} candles: ${e.message}. Retrying…`;
       $('banner').hidden = false;
+      // Try again by itself: no page refresh needed.
+      setTimeout(() => { if (seq === state.seq) load({ soft }); }, 4000);
     }
   } finally {
     if (seq === state.seq) $('loading').hidden = true;
@@ -1482,7 +1484,9 @@ async function boot() {
   load(); // fetches the spot-gold basis itself when it is not known yet
   loadDayOpen();
   loadNews();
-  startMemes();
+  // The radar starts once the chart has had time to load, so its many requests
+  // never hold up the chart's own.
+  setTimeout(startMemes, memeMode ? 0 : 4000);
   if (memeMode) setMemeMode(true);
   loadPaper();
   const dot = $('liveDot');
