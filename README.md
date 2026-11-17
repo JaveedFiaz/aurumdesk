@@ -43,6 +43,12 @@ otherwise no filter. About 1.4 trades a day across both markets:
 | Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
 | Gold | 5m | Liquidity sweep (FAP-style, with 1H trend), London/NY only | 2R | 5/8 | 107 in 3 years | 43 | 1.31 | +18.7 |
 | Bitcoin | 1h | Trend breakout (48-hour high/low on volume and taker flow) | 3R | none | 492 in 3 years | 32 | 1.14 | +49 |
+| Gold | 4h | VWAP 2-sigma snap-back (swing) | 5R | none | 97 in 3 years | 32 | 2.01 | +66.7 |
+| Gold | 4h | VWAP trend pullback (swing) | 2R | none | 54 in 3 years | 57 | 2.65 | +38.3 |
+| Bitcoin | 4h | VWAP trend pullback (swing) | 2R | none | 93 in 3 years | 46 | 1.60 | +31.6 |
+| Bitcoin | 4h | Trend breakout (swing) | 5R | 5/8 | 54 in 3 years | 30 | 1.63 | +24.7 |
+| Bitcoin | 1h | Zone retest | 5R | none | 50 in 3 years | 38 | 2.06 | +35.6 |
+| Bitcoin | 1h | Previous-day high/low rejection | 5R | none | 146 in 3 years | 29 | 1.28 | +32.4 |
 | Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | — | 1.38 | +6.4 |
 | Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
 | Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |
