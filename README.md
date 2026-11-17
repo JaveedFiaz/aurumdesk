@@ -41,7 +41,8 @@ otherwise no filter. About 1.4 trades a day across both markets:
 | Gold | 15m | EMA trend pullback | 3R | 7/8 | 57 in 2 years | 39 | 1.27 | +9.9 |
 | Gold | 5m | Session sweep | 3R | 6/8 | 46 in 1 year | 39 | 1.50 | +14.8 |
 | Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
-| Gold | 5m | Liquidity sweep (FAP-style, with 1H trend) | 1.5R | none | 618 in 3 years | 45 | 1.13 | +45 (thin in the last 12 months: PF ~1.1, so watch only until it passes the gate) |
+| Gold | 5m | Liquidity sweep (FAP-style, with 1H trend), London/NY only | 2R | 5/8 | 107 in 3 years | 43 | 1.31 | +18.7 |
+| Bitcoin | 1h | Trend breakout (48-hour high/low on volume and taker flow) | 3R | none | 492 in 3 years | 32 | 1.14 | +49 |
 | Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | — | 1.38 | +6.4 |
 | Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
 | Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |

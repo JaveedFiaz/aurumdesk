@@ -148,7 +148,7 @@ test('HTTP API: both markets, every timeframe, flow, news, COT, stream and a gua
 
   const cfg = await get('/api/config');
   assert.deepEqual(cfg.markets.map((m) => m.id), ['gold', 'btc']);
-  assert.deepEqual(cfg.tfs, ['M1', 'M5', 'M15']);
+  assert.deepEqual(cfg.tfs, ['M1', 'M5', 'M15', 'H1']);
 
   let bot;
   for (let k = 0; k < 200; k++) {
@@ -156,7 +156,7 @@ test('HTTP API: both markets, every timeframe, flow, news, COT, stream and a gua
     if (Object.values(bot.tfs).every((x) => !x.pending)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  for (const tf of ['M1', 'M5', 'M15']) {
+  for (const tf of ['M1', 'M5', 'M15', 'H1']) {
     assert.ok(Array.isArray(bot.tfs[tf].stats) && Array.isArray(bot.tfs[tf].signals) && Array.isArray(bot.tfs[tf].areas), tf);
     assert.equal(bot.tfs[tf].tf, tf);
   }

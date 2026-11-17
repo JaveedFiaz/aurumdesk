@@ -44,7 +44,7 @@ const LAYERS = [
   { id: 'vwap', label: 'VWAP' },
 ];
 const DEFAULT_LAYERS = { signals: true, levels: true, surges: true, structure: false, zones: false, ob: false, liq: false, walls: true, vwap: true, htf: false, sr: false, profile: false };
-const TFS = ['M1', 'M5', 'M15'];
+const TFS = ['M1', 'M5', 'M15', 'H1'];
 
 const state = {
   market: store.get('market', 'gold'),
