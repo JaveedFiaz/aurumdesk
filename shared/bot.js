@@ -204,7 +204,11 @@ export function analyze(c, h, { tf = BOT_TF, htf = BOT_HTF, include = STRATEGIES
   const stats = prior ? prior.stats : include.map((s) => {
     let gate = QUALITY[QUALITY.length - 1];
     let sum = null;
-    for (const levels of [QUALITY, QUALITY_FALLBACK]) {
+    // A play can fix its confluence level (e.g. 0 for the liquidity sweep, whose
+    // edge is in trade count, not in filtering).
+    const fixed = include.find((x) => x.id === s.id)?.gate;
+    if (fixed != null) gate = fixed;
+    for (const levels of fixed != null ? [[fixed]] : [QUALITY, QUALITY_FALLBACK]) {
       for (const g of levels) {
         const x = summarize(gated(s.id, g), s.id, splitTime);
         if (x.active && (!sum || x.expR > sum.expR)) {

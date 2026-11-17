@@ -95,3 +95,19 @@ confluence, results pooled across coins (`research/`):
 
 Everything else (volume breakouts, zone retests and rejections, sweeps, EMA
 pullbacks, session sweeps, ...) lost money on memecoins or failed one half.
+
+## Liquidity sweep (FAP-style) in Pulse
+
+The FAP AI channel's setup (a sweep of the latest swing high/low that closes back
+inside), with a 1H EMA 20/50 trend filter added and a fixed 0.26% stop, run in
+Pulse's engine (entry at next open, one trade at a time, 0.01% cost):
+
+| Market / TF | Target | Trades (3 years) | Won | PF | Total | Avg R by year |
+|---|---|---|---|---|---|---|
+| Gold 5m | 1.5R | 618 | 45% | 1.13 | +45.2R | +0.04 / +0.13 / +0.05 |
+| Gold 5m | 2R | 610 | 40% | 1.14 | +52.3R | -0.04 / +0.16 / +0.10 |
+| Gold 15m | 1.5R | 268 | 37% | 0.83 | -29.3R | lost |
+| Bitcoin 5m / 15m | 1.5-2R | 513-1294 | 33-41% | 0.76-0.92 | -52 to -85R | lost |
+
+On the last 12 months alone (the window the live server tests) gold 5m has PF
+1.06-1.10, below the 1.15 gate, so it shows as watch only until it passes a re-test.

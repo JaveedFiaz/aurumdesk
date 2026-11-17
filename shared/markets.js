@@ -13,9 +13,10 @@ export const MARKETS = [
     unit: 'oz',
     lot: 100,
     costBps: 1, // round-trip spread + slippage, in basis points of price (about $0.40/oz)
+    closedWeekends: true, // spot gold is shut Friday 21:00 to Sunday 23:00 UTC (PAXG is not)
     plays: {
       M15: { htf: 'H1', history: 70000, strategies: [{ id: 'zone_retest', rr: 2 }, { id: 'vol_breakout', rr: 3 }, { id: 'ema_pullback', rr: 3 }, { id: 'zone_reject', rr: 2 }] },
-      M5: { htf: 'H1', history: 105000, strategies: [{ id: 'trap_flow', rr: 2 }, { id: 'asia_sweep', rr: 3 }, { id: 'zone_reject', rr: 2 }] },
+      M5: { htf: 'H1', history: 105000, strategies: [{ id: 'trap_flow', rr: 2 }, { id: 'asia_sweep', rr: 3 }, { id: 'zone_reject', rr: 2 }, { id: 'liq_sweep', rr: 1.5, allHours: true, gate: 0 }] },
       M1: { htf: 'M15', history: 120000, strategies: [{ id: 'zone_sweep', rr: 3 }] },
     },
   },
