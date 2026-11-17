@@ -129,3 +129,22 @@ with profit factor 1.15+:
 The Bitcoin trend breakout is just under the 1.15 bar at full taker fees but
 positive in every year; it passes the live gate at the terminal's 0.02% cost.
 No Bitcoin 5m or 15m scalp, old or new, made money after fees.
+
+## Swing strategies: 1H and 4H (3 years, Nov 2023 - Nov 2026)
+
+Every strategy on gold 1H/4H and Bitcoin 1H/4H at 1.5-5R (251 combinations with
+40+ trades), same costs. 24 were profitable in each year; because gold doubled
+and Bitcoin rose over the period, longs and shorts were then checked separately
+and only strategies whose sells also made money were kept:
+
+| Market / TF | Strategy | Target | Trades | PF | Total | Longs PF / shorts PF | Worst drawdown |
+|---|---|---|---|---|---|---|---|
+| Gold 4H | VWAP 2-sigma snap-back | 5R | 97 | 2.01 | +66.7R | 2.87 / 1.45 | 9.1R |
+| Gold 4H | VWAP trend pullback | 2R | 54 | 2.65 | +38.3R | 3.41 / 1.23 | 4.1R |
+| Bitcoin 4H | VWAP trend pullback | 2R | 93 | 1.60 | +31.6R | 1.61 / 1.59 | 6.6R |
+| Bitcoin 4H | Trend breakout, 5/8+ | 5R | 54 | 1.63 | +24.7R | 1.49 / 1.76 | 6.2R |
+| Bitcoin 1H | Zone retest | 5R | 50 | 2.06 | +35.6R | 2.26 / 1.86 | 5.9R |
+| Bitcoin 1H | Previous-day high/low rejection | 5R | 146 | 1.28 | +32.4R | 1.21 / 1.35 | 13.9R |
+
+Rejected: gold 1H trend breakout (+71.6R, but its shorts lost: the profit was
+the gold rally, not the rule). Trades last 1-4 days on 4H and about a day on 1H.

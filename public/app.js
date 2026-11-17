@@ -45,7 +45,7 @@ const LAYERS = [
   { id: 'past', label: 'Backtest trades' },
 ];
 const DEFAULT_LAYERS = { past: false, signals: true, levels: true, surges: true, structure: false, zones: false, ob: false, liq: false, walls: true, vwap: true, htf: false, sr: false, profile: false };
-const TFS = ['M1', 'M5', 'M15', 'H1'];
+const TFS = ['M1', 'M5', 'M15', 'H1', 'H4'];
 
 const state = {
   market: store.get('market', 'gold'),
