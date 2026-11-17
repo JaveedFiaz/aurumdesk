@@ -42,8 +42,9 @@ const LAYERS = [
   { id: 'liq', label: 'Liquidity' },
   { id: 'walls', label: 'Book walls' },
   { id: 'vwap', label: 'VWAP' },
+  { id: 'past', label: 'Backtest trades' },
 ];
-const DEFAULT_LAYERS = { signals: true, levels: true, surges: true, structure: false, zones: false, ob: false, liq: false, walls: true, vwap: true, htf: false, sr: false, profile: false };
+const DEFAULT_LAYERS = { past: false, signals: true, levels: true, surges: true, structure: false, zones: false, ob: false, liq: false, walls: true, vwap: true, htf: false, sr: false, profile: false };
 const TFS = ['M1', 'M5', 'M15', 'H1'];
 
 const state = {
@@ -58,6 +59,7 @@ const state = {
   candles: [],
   result: null,
   bots: {}, // market -> /api/bot result
+  published: {}, // market -> signals the server published live
   flow: null,
   paper: null,
   seq: 0,
@@ -439,6 +441,35 @@ function runAnalysis() {
 const play = () => state.bots[state.market]?.tfs?.[state.tf];
 
 // BUY / SELL labels on the chart at every signal candle of this timeframe.
+// Signals the server actually published while it was running, with the result
+// they really had on the chart's prices (stop or target, whichever came first).
+function publishedTrades() {
+  const c = state.candles;
+  const list = (state.published[state.market] || []).filter((p) => p.tf === state.tf && p.signalTime);
+  return list.map((p) => {
+    const bull = p.dir === 'bull';
+    const risk = Math.abs(p.entry - p.stop);
+    let exit = null;
+    for (const x of c) {
+      if (x.time <= p.signalTime) continue;
+      const hitS = bull ? x.low <= p.stop : x.high >= p.stop;
+      const hitT = bull ? x.high >= p.target : x.low <= p.target;
+      if (hitS || hitT) {
+        exit = { time: x.time, r: hitS ? -1 : Math.abs(p.target - p.entry) / risk };
+        break;
+      }
+    }
+    return { ...p, published: true, entryTime: p.signalTime, exitTime: exit?.time, r: exit?.r, status: exit ? 'closed' : 'open' };
+  });
+}
+
+async function loadPublished() {
+  try {
+    const d = await feed.signals(state.market);
+    state.published[state.market] = d.signals;
+  } catch { /* next pass */ }
+}
+
 function drawMarkers() {
   const b = play();
   if (!b || b.pending || !state.layers.signals || !state.candles.length) {
@@ -446,12 +477,13 @@ function drawMarkers() {
     return;
   }
   const first = state.candles[0].time;
-  const list = [...b.recent, ...b.signals, ...b.watch].filter((t) => t.signalTime >= first);
+  // Live signals and the ones really published; backtest replays only when that layer is on.
+  const list = [...publishedTrades(), ...b.signals, ...(state.layers.past ? b.recent.map((t) => ({ ...t, backtest: true })) : [])].filter((t) => t.signalTime >= first);
   const seen = new Set();
   candleSeries.setMarkers(list.filter((t) => !seen.has(t.signalTime) && seen.add(t.signalTime)).sort((x, y) => x.signalTime - y.signalTime).map((t) => {
     const long = t.dir === 'bull';
-    const res = t.status === 'closed' ? (t.r > 0 ? ' ✓' : ' ✗') : '';
-    return { time: t.signalTime, position: long ? 'belowBar' : 'aboveBar', color: long ? UP : DN, shape: long ? 'arrowUp' : 'arrowDown', text: `${long ? 'BUY' : 'SELL'}${res}`, size: 1.4 };
+    const res = t.status === 'closed' && t.r != null ? (t.r > 0 ? ' ✓' : ' ✗') : '';
+    return { time: t.signalTime, position: long ? 'belowBar' : 'aboveBar', color: t.backtest ? 'rgba(196,181,253,0.7)' : long ? UP : DN, shape: long ? 'arrowUp' : 'arrowDown', text: `${t.backtest ? 'backtest ' : ''}${long ? 'BUY' : 'SELL'}${res}`, size: t.backtest ? 0.9 : 1.4 };
   }));
 }
 
@@ -508,7 +540,7 @@ function withZones(areas) {
         const stop = bull ? z.bottom - 0.25 * A : z.top + 0.25 * A;
         const target = entry + (bull ? 2 : -2) * Math.abs(entry - stop);
         out.push({
-          dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, src: z.src,
+          dir, top: z.top, bottom: z.bottom, time: (z.createdTime ?? z.time) + (z.src === '1H' ? 3600 : 0), watch: true, src: z.src,
           strong: ob ? !z.touches : z.score >= z.strongAt, score: z.score, kind: ob ? 'order block' : bull ? 'demand' : 'supply',
           plan: { entry, stop, target }, primary: n === 0, near: A > 0 && Math.abs(price - entry) <= A,
         });
@@ -525,7 +557,8 @@ function pushOverlay() {
     areas: withZones(b.areas.map((a) => sh(a, k))),
     triggers: b.triggers.map((g) => sh(g, k)),
     live: [...b.signals.map((t) => ({ ...t, q: true })), ...b.watch.map((t) => ({ ...t, q: false }))].map((t) => sh(t, k)),
-    history: b.recent.filter((t) => t.entryTime >= first).slice(-25).map((t) => sh(t, k)),
+    // Published signals are already in spot prices; backtest replays only on request.
+    history: [...publishedTrades().filter((t) => t.status === 'closed'), ...(state.layers.past ? b.recent.filter((t) => t.entryTime >= first).slice(-25).map((t) => ({ ...sh(t, k), backtest: true })) : [])],
     surges: state.layers.surges ? (state.surges || []).slice(-3) : [],
   } : { areas: withZones([]), surges: state.layers.surges ? (state.surges || []).slice(-3) : [] };
   overlay.update({ candles: state.candles, result: state.result, htf: null, layers: state.layers, trade });
@@ -660,7 +693,8 @@ $('layers').addEventListener('click', (e) => {
   if (id === 'vwap') vwapSeries.setData(state.layers.vwap ? vwap(state.candles, vwapAnchor(TF[state.tf])) : []);
   if (id === 'walls') drawWalls();
   if (id === 'surges') volumeSeries.setData(volBars(state.candles, state.layers.surges ? state.surges : []));
-  if (id === 'signals') drawMarkers();
+  if (id === 'signals' || id === 'past') drawMarkers();
+  if (id === 'past') pushOverlay();
   if (id === 'levels') drawLevels();
   pushOverlay();
 });
@@ -962,6 +996,7 @@ async function loadBots() {
       state.bots[m.id] = await feed.bot(m.id);
     } catch { /* retried on the next pass */ }
   }));
+  await loadPublished();
   renderHero();
   renderScore();
   renderTrack();
@@ -1233,7 +1268,7 @@ function renderTrack() {
   const totalR = list.reduce((a, x) => a + x.r, 0);
   const week = list.filter((x) => x.exitTime >= nowSec() - 7 * 86400);
   const weekR = week.reduce((a, x) => a + x.r, 0);
-  $('trackMeta').textContent = 'last 30 days · proven strategies · both markets · $10,000 at 1% risk';
+  $('trackMeta').textContent = 'backtest replay of the last 30 days (not live calls) · proven strategies · both markets · $10,000 at 1% risk';
   $('track').innerHTML = `<div class="track-top">
     <div class="track-eq"><div class="big mono ${eq >= 10000 ? 'bull' : 'bear'}">${money(eq)}</div><div class="muted small">${signed((eq / 100 - 100))}% · ${signed(totalR, 1)}R</div></div>
     <div class="kpis"><div>${list.length}<span>trades</span></div><div>${pct(wins.length / list.length)}<span>won</span></div><div>${gl ? (gw / gl).toFixed(2) : '∞'}<span>profit factor</span></div><div class="${weekR >= 0 ? 'bull' : 'bear'}">${signed(weekR, 1)}R<span>last 7 days</span></div></div>

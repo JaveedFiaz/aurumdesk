@@ -872,7 +872,7 @@ export function tradeAreas(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) 
         const risk = Math.abs(entry - stop);
         if (!(risk <= rules.maxStopAtr * A)) return;
         areas.push({
-          dir, strategy: zoneId, top: z.top, bottom: z.bottom, time: z.time,
+          dir, strategy: zoneId, top: z.top, bottom: z.bottom, time: z.createdTime ?? z.time,
           kind: z.kind === 'bullOB' || z.kind === 'bearOB' ? 'Order block' : bull ? 'Demand' : 'Supply',
           entry, stop, target: entry + (bull ? 1 : -1) * rr * risk,
         });
