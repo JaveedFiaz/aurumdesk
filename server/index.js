@@ -140,7 +140,7 @@ export function createApp({
       tf: { id: tf, sec: TF[tf].sec },
       htf: { id: play.htf, sec: TF[play.htf].sec },
       include: play.strategies,
-      rules: { ...DEFAULT_RULES, cost: (price * x.m.costBps) / 10000, maxPerDay: tf === 'M15' ? 3 : 6 },
+      rules: { ...DEFAULT_RULES, cost: (price * x.m.costBps) / 10000, maxPerDay: tf === 'M15' ? 3 : 6, closedWeekends: !!x.m.closedWeekends },
       cot: x.m.id === 'gold' ? cot : null,
       label: x.provider.label,
       ...extra,

@@ -39,6 +39,7 @@ export const RETIRED = [
   { id: 'pdhl_reject', name: 'PDH/PDL reject', desc: 'First wick of the day through the previous day high or low.' },
   { id: 'htf_zone', name: '1H zone reject', desc: 'First touch of an untested 1H supply/demand zone.' },
   { id: 'ema_pullback', name: 'EMA trend pullback', desc: 'EMA 20 above EMA 50 (below for shorts): price dips to the EMA 20 and closes back on the trend side with buyers (sellers) in control.' },
+  { id: 'liq_sweep', name: 'Liquidity sweep', desc: 'Price runs the stops beyond the latest swing high (low) and closes back below (above) it as a red (green) candle, in the direction of the 1H EMA 20/50 trend. Stop 0.26% away (about $10 on gold).' },
   { id: 'zone_reject', name: 'Strong zone rejection', desc: 'Price wicks into a strong support (demand) or resistance (supply) zone and closes back out of it on 1.2× volume or more, with order flow behind the rejection.' },
   { id: 'zone_reject_trend', name: 'Zone rejection with trend', desc: 'A strong zone rejection in the direction of the 1H trend.' },
   { id: 'bos_retest', name: 'Break & retest', desc: 'Structure breaks in the higher-timeframe trend direction, price comes back to the broken level once and rejects it with order flow.' },
@@ -68,6 +69,14 @@ export function inKillzone(t) {
   return (m >= 420 && m < 600) || (m >= 750 && m < 930);
 }
 
+// Spot gold (and forex) is shut from Friday 21:00 to Sunday 23:00 UTC.
+export function weekendClosed(t) {
+  const d = new Date(t * 1000);
+  const wd = d.getUTCDay();
+  const hr = d.getUTCHours();
+  return (wd === 5 && hr >= 21) || wd === 6 || (wd === 0 && hr < 23);
+}
+
 export function inSession(t) {
   const ldn = localMinutes('Europe/London', t);
   const ny = localMinutes('America/New_York', t);
@@ -94,7 +103,16 @@ export function buildHtf(h) {
   if (!h || h.length < 30) return null;
   const a = atr(h);
   const ms = marketStructure(h, findSwings(h, 5));
-  return { trend: ms.trend, zones: supplyDemand(h, a, ms.trendAt).filter((z) => !z.broken) };
+  // EMA 20 / 50 of the closed higher-timeframe candles (the liquidity-sweep trend filter).
+  const k20 = 2 / 21;
+  const k50 = 2 / 51;
+  let e20 = h[0].close;
+  let e50 = h[0].close;
+  for (const x of h) {
+    e20 += (x.close - e20) * k20;
+    e50 += (x.close - e50) * k50;
+  }
+  return { trend: ms.trend, zones: supplyDemand(h, a, ms.trendAt).filter((z) => !z.broken), emaTrend: e20 > e50 ? 'bull' : e20 < e50 ? 'bear' : null };
 }
 
 function plan(dir, bar, stop, extra = {}) {
@@ -255,6 +273,43 @@ export const CHECKS = {
       return plan(dir, bar, stop, { why: `Snapped back inside the VWAP 2σ band (VWAP ${band.mean.toFixed(2)})` });
     }
     return null;
+  },
+
+  // Liquidity sweep (the FAP-style setup, with a trend filter): the latest
+  // confirmed swing high (low) with 4 lower highs (higher lows) each side,
+  // untouched since, is run by this candle, which closes back below (above) it
+  // as a red (green) candle, in the direction of the 1H EMA 20/50 trend. Stop a
+  // fixed 0.26% away. Same rules as tradingview/pulse-gold-sweep.pine.
+  liq_sweep(ctx) {
+    const { w, htf } = ctx;
+    const L = w.length - 1;
+    const bar = w[L];
+    const P = 4;
+    if (!htf || !htf.emaTrend || L < 2 * P + 2) return null;
+    const pivot = (hi) => {
+      // Most recent pivot confirmed before this bar (centre at k, confirmed at k + P <= L - 1).
+      for (let k = L - 1 - P; k >= Math.max(P, L - 100); k--) {
+        let ok = true;
+        for (let j = 1; j <= P && ok; j++) {
+          if (hi ? w[k - j].high >= w[k].high || w[k + j].high >= w[k].high : w[k - j].low <= w[k].low || w[k + j].low <= w[k].low) ok = false;
+        }
+        if (!ok) continue;
+        const p = hi ? w[k].high : w[k].low;
+        // Used once: no candle after confirmation may have traded through it.
+        for (let j = k + P + 1; j < L; j++) if (hi ? w[j].high > p : w[j].low < p) return null;
+        return p;
+      }
+      return null;
+    };
+    const ph = pivot(true);
+    const pl = pivot(false);
+    const sell = ph != null && bar.high > ph && bar.close < ph && bar.close < bar.open;
+    const buy = pl != null && bar.low < pl && bar.close > pl && bar.close > bar.open;
+    if (sell === buy) return null;
+    const dir = buy ? 'bull' : 'bear';
+    if (htf.emaTrend !== dir) return null;
+    const stop = bar.close * (buy ? 1 - 0.0026 : 1 + 0.0026);
+    return plan(dir, bar, stop, { fixedStop: true, why: `Swept the ${buy ? 'swing low' : 'swing high'} ${(buy ? pl : ph).toFixed(2)} and closed back ${buy ? 'above' : 'below'} it, with the 1H trend`, level: buy ? pl : ph, trap: true });
   },
 
   // Strong zone rejection: a wick into strong demand (support) or supply
@@ -666,6 +721,7 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
   const { w, a } = ctx;
   const L = w.length - 1;
   const bar = w[L];
+  if (rules.closedWeekends && weekendClosed(bar.time)) return [];
   const inSess = !rules.sessionOnly || inSession(bar.time);
   const out = [];
   for (const id of ids) {
@@ -673,7 +729,8 @@ export function scanBar(ctx, rules = DEFAULT_RULES, ids = STRATEGIES.map((x) => 
     const s = CHECKS[id](ctx);
     if (!s) continue;
     const risk = Math.abs(s.entry - s.stop);
-    if (!(risk >= rules.minStopAtr * a[L] && risk <= rules.maxStopAtr * a[L] && risk >= 3 * (rules.costPct ? s.entry * rules.costPct : rules.cost))) continue;
+    // Fixed-distance stops (liquidity sweep) skip the ATR bounds.
+    if (!((s.fixedStop || (risk >= rules.minStopAtr * a[L] && risk <= rules.maxStopAtr * a[L])) && risk >= 3 * (rules.costPct ? s.entry * rules.costPct : rules.cost))) continue;
     const sign = s.dir === 'bull' ? 1 : -1;
     const rr = rules.rrBy?.[id] ?? STRATEGY_BY_ID[id]?.rr ?? rules.rr;
     out.push({ ...s, strategy: id, time: bar.time, rr, target: s.entry + sign * rr * risk });
