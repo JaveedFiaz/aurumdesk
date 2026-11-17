@@ -159,7 +159,14 @@ async function load({ soft = false } = {}) {
     state.candles = [];
     candleSeries.setData([]);
     volumeSeries.setData([]);
+    vwapSeries.setData([]);
     candleSeries.setMarkers([]);
+    // Every line from the old market goes too, or it would pin the price axis.
+    wallLines.forEach((l) => candleSeries.removePriceLine(l));
+    wallLines = [];
+    levelLines.forEach((l) => candleSeries.removePriceLine(l));
+    levelLines = [];
+    if (state.flow && state.flow.market !== market) state.flow = null;
   }
   try {
     const m = mk();
@@ -412,6 +419,7 @@ function refreshFlow(force = false) {
   const tr = state.live.trades.slice(-1000).map((t) => ({ ...t, price: t.price + k }));
   const b = mergedBook();
   state.flow = {
+    market: state.live.market,
     available: true,
     live: state.streamOn,
     source: `${mk().binance} · live`,
@@ -614,8 +622,12 @@ function drawWalls() {
   wallLines.forEach((l) => candleSeries.removePriceLine(l));
   wallLines = [];
   const book = state.flow?.book;
-  if (!book || !state.layers.walls) return;
-  const top = (w) => w.slice().sort((a, b) => b.size - a.size).slice(0, 2);
+  const c = state.candles;
+  // Only this market's book, and only levels near price: a line from the other
+  // market (64,000 on a 3,800 gold chart) stretches the price axis and flattens it.
+  if (!book || !state.layers.walls || state.flow.market !== state.market || state.chartKey !== `${state.market}:${state.tf}` || !c.length) return;
+  const near = (w) => Math.abs(w.price / c[c.length - 1].close - 1) < 0.03;
+  const top = (w) => w.filter(near).sort((a, b) => b.size - a.size).slice(0, 2);
   for (const w of top(book.bidWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(22,199,132,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `bid wall ${compact(w.size)}` }));
   for (const w of top(book.askWalls)) wallLines.push(candleSeries.createPriceLine({ price: w.price, color: 'rgba(234,57,67,0.6)', lineWidth: 2, lineStyle: LC.LineStyle.SparseDotted, axisLabelVisible: false, title: `ask wall ${compact(w.size)}` }));
 }
@@ -1127,7 +1139,7 @@ async function loadFlow() {
   try {
     const f = await feed.flow(market, tf);
     if (market !== state.market || tf !== state.tf) return;
-    state.flow = f;
+    state.flow = { ...f, market };
   } catch {
     return;
   }
