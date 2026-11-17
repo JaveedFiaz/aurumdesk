@@ -82,7 +82,7 @@ function findOrderBlock(c, from, to, dir) {
   for (let k = ext; k >= Math.max(from, ext - 6); k--) {
     if (bull ? c[k].close < c[k].open : c[k].close > c[k].open) { ob = k; break; }
   }
-  const zone = { kind: bull ? 'bullOB' : 'bearOB', side: dir, top: c[ob].high, bottom: c[ob].low, index: ob, time: c[ob].time, createdIndex: to };
+  const zone = { kind: bull ? 'bullOB' : 'bearOB', side: dir, top: c[ob].high, bottom: c[ob].low, index: ob, time: c[ob].time, createdIndex: to, createdTime: c[to].time };
   return track(c, zone);
 }
 
@@ -151,6 +151,7 @@ export function supplyDemand(c, a, trendAt = [], opts = {}) {
       index: start,
       time: c[start].time,
       createdIndex: j,
+      createdTime: c[j].time, // when the zone became known (its impulse candle closed)
       impulse: body / ref,
       bases: bases.length,
       aligned: trendAt[j] === (bull ? 'bull' : 'bear'),

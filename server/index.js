@@ -362,7 +362,7 @@ export function createApp({
     const name = x.m.id === 'gold' ? 'Gold' : x.m.label;
     const entry = r2(sg.entry);
     const item = {
-      id, market: x.m.id, tf, strategy: sg.strategy, dir: sg.dir, time: Math.floor(Date.now() / 1000),
+      id, market: x.m.id, tf, strategy: sg.strategy, dir: sg.dir, time: Math.floor(Date.now() / 1000), signalTime: sg.signalTime,
       entry, stop: r2(sg.stop), target: r2(sg.target),
       text: `${sg.dir === 'bull' ? 'Buy' : 'Sell'} ${name} (${entry})\nStoploss at : ${r2(sg.stop)}\nTp1 : ${r2(sg.target)}\nPulse Scalper · ${tf} · ${sg.strategy}${sg.factors ? ` · confluence ${sg.factors.filter((f) => f.ok).length}/${sg.factors.length}` : ''}`,
     };

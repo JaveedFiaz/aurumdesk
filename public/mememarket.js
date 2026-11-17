@@ -80,7 +80,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
         .forEach((z, n) => {
           const entry = bull ? z.top : z.bottom;
           const stop = bull ? z.bottom - 0.25 * result.atr : z.top + 0.25 * result.atr;
-          out.push({ dir, top: z.top, bottom: z.bottom, time: z.time, watch: true, strong: z.score >= 70, score: z.score, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply', src: st.tf === 'M15' ? '15m' : st.tf === 'M5' ? '5m' : '1h', plan: { entry, stop, target: entry + (bull ? 2 : -2) * Math.abs(entry - stop) }, primary: n === 0, near: Math.abs(price - entry) <= result.atr });
+          out.push({ dir, top: z.top, bottom: z.bottom, time: z.createdTime ?? z.time, watch: true, strong: z.score >= 70, score: z.score, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply', src: st.tf === 'M15' ? '15m' : st.tf === 'M5' ? '5m' : '1h', plan: { entry, stop, target: entry + (bull ? 2 : -2) * Math.abs(entry - stop) }, primary: n === 0, near: Math.abs(price - entry) <= result.atr });
         });
     }
     return out;
@@ -90,7 +90,6 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
     const c = st.candles;
     if (!c.length) return;
     const result = c.length > 40 ? analyze(c.slice(0, -1), { tf: { id: st.tf, sec: SEC[st.tf] } }) : null;
-    const first = c[0].time;
     const sc = st.scan;
     overlay.decimals = decimalsFor(c[c.length - 1].close);
     overlay.update({
@@ -102,7 +101,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
         areas: zonesAhead(result, c[c.length - 1].close),
         triggers: [],
         live: sc ? sc.live.map((t) => ({ ...t, q: true })) : [],
-        history: sc ? sc.history.filter((t) => t.entryTime >= first).slice(-20) : [],
+        history: [], // only live setups: past ones would be a backtest replay
         surges: [],
       },
     });

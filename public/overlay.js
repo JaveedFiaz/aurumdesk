@@ -121,15 +121,15 @@ export class Overlay {
         const fits = (z) => !(result.atr > 0) || z.top - z.bottom <= 2.5 * result.atr;
         for (const z of result.zones.filter(fits)) {
           const col = COLORS[z.kind];
-          this.box(X(z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.16), rgba(col, 0.5));
+          this.box(X(z.createdIndex ?? z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.16), rgba(col, 0.5));
           this.tag(`${z.kind === 'demand' ? 'Demand' : 'Supply'} ${z.score}`, right - 6, (Y(z.top) + Y(z.bottom)) / 2, rgba(col, 1), 'right');
         }
       }
       if (layers.ob) {
         for (const z of result.orderBlocks.filter((z) => !(result.atr > 0) || z.top - z.bottom <= 2.5 * result.atr)) {
           const col = COLORS[z.kind];
-          this.box(X(z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.22), rgba(col, 0.9));
-          this.tag(z.kind === 'bullOB' ? 'Bull OB' : 'Bear OB', Math.max(4, X(z.index) + 4), (Y(z.top) + Y(z.bottom)) / 2, rgba(col, 1), 'left');
+          this.box(X(z.createdIndex ?? z.index), right, Y(z.top), Y(z.bottom), rgba(col, 0.22), rgba(col, 0.9));
+          this.tag(z.kind === 'bullOB' ? 'Bull OB' : 'Bear OB', Math.max(4, X(z.createdIndex ?? z.index) + 4), (Y(z.top) + Y(z.bottom)) / 2, rgba(col, 1), 'left');
         }
       }
       if (layers.sr) {
@@ -197,7 +197,7 @@ export class Overlay {
       this.box(x1, x2, Y(p.entry), Y(p.target), green(0.1), green(0.35));
       this.box(x1, x2, Y(p.entry), Y(p.stop), red(0.1), red(0.35));
       const win = p.r > 0;
-      this.tag(`${win ? '+' : ''}${p.r.toFixed(1)}R`, x2 + 3, Y(win ? p.target : p.stop), win ? COLORS.bull : COLORS.bear, 'left', true);
+      this.tag(`${p.backtest ? 'backtest ' : p.published ? 'live ' : ''}${win ? '+' : ''}${p.r.toFixed(1)}R`, x2 + 3, Y(win ? p.target : p.stop), p.backtest ? 'rgba(196,181,253,0.9)' : win ? COLORS.bull : COLORS.bear, 'left', true);
     }
 
     const hasLive = !!(t.live && t.live.length);
