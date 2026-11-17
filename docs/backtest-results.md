@@ -111,3 +111,21 @@ Pulse's engine (entry at next open, one trade at a time, 0.01% cost):
 
 On the last 12 months alone (the window the live server tests) gold 5m has PF
 1.06-1.10, below the 1.15 gate, so it shows as watch only until it passes a re-test.
+
+## Scalps and crypto strategies (3 years, Nov 2023 - Nov 2026)
+
+Every strategy, including four new crypto order-flow ones (CVD divergence,
+squeeze breakout, 48-candle trend breakout, VWAP stretch fade), on Bitcoin 5m,
+15m and 1h (all hours) and gold 5m (sessions and all hours), at 1-3R and 0, 5/8
+and 6/8 confluence: 634 combinations. Costs: 0.08% per Bitcoin trade (futures
+taker fees), 0.01% per gold trade. Kept only if profitable in each of the 3 years
+with profit factor 1.15+:
+
+| Market / TF | Strategy | Target | Trades | Won | PF | Total | Avg R by year |
+|---|---|---|---|---|---|---|---|
+| Gold 5m (London/NY) | Liquidity sweep, 5/8+ | 2R | 107 | 43% | 1.31 | +18.7R | +0.31 / +0.22 / +0.10 |
+| Bitcoin 1h | Trend breakout | 3R | 492 | 32% | 1.14 (1.21 at 0.04% fees) | +49R | +0.20 / +0.08 / +0.02 |
+
+The Bitcoin trend breakout is just under the 1.15 bar at full taker fees but
+positive in every year; it passes the live gate at the terminal's 0.02% cost.
+No Bitcoin 5m or 15m scalp, old or new, made money after fees.

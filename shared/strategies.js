@@ -40,6 +40,10 @@ export const RETIRED = [
   { id: 'htf_zone', name: '1H zone reject', desc: 'First touch of an untested 1H supply/demand zone.' },
   { id: 'ema_pullback', name: 'EMA trend pullback', desc: 'EMA 20 above EMA 50 (below for shorts): price dips to the EMA 20 and closes back on the trend side with buyers (sellers) in control.' },
   { id: 'liq_sweep', name: 'Liquidity sweep', desc: 'Price runs the stops beyond the latest swing high (low) and closes back below (above) it as a red (green) candle, in the direction of the 1H EMA 20/50 trend. Stop 0.26% away (about $10 on gold).' },
+  { id: 'cvd_div', name: 'CVD divergence', desc: 'Price sweeps a recent low (high) but cumulative taker delta makes a higher low (lower high): sellers (buyers) are running out. Enter on the close back inside.' },
+  { id: 'squeeze_break', name: 'Squeeze breakout', desc: 'Bollinger band width at its narrowest in 100 candles, then a close outside the band with order flow behind it, in the direction of the 50 EMA.' },
+  { id: 'donch_break', name: 'Trend breakout', desc: 'Close through the highest high (lowest low) of the last 48 candles on above-average volume with taker flow agreeing.' },
+  { id: 'vwap_fade', name: 'VWAP stretch fade', desc: 'Price stretched 2.5 standard deviations from the daily VWAP, then a candle closes back toward it while delta flips: fade the stretch.' },
   { id: 'zone_reject', name: 'Strong zone rejection', desc: 'Price wicks into a strong support (demand) or resistance (supply) zone and closes back out of it on 1.2× volume or more, with order flow behind the rejection.' },
   { id: 'zone_reject_trend', name: 'Zone rejection with trend', desc: 'A strong zone rejection in the direction of the 1H trend.' },
   { id: 'bos_retest', name: 'Break & retest', desc: 'Structure breaks in the higher-timeframe trend direction, price comes back to the broken level once and rejects it with order flow.' },
@@ -271,6 +275,109 @@ export const CHECKS = {
       const ext = bull ? Math.min(prev.low, bar.low) : Math.max(prev.high, bar.high);
       const stop = bull ? ext - 0.2 * a[L] : ext + 0.2 * a[L];
       return plan(dir, bar, stop, { why: `Snapped back inside the VWAP 2σ band (VWAP ${band.mean.toFixed(2)})` });
+    }
+    return null;
+  },
+
+  // CVD divergence: price takes out the lowest low (highest high) of the last
+  // 30 candles but cumulative taker delta at this candle is above (below) its
+  // level at that earlier extreme, and the candle closes back inside.
+  cvd_div(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 40 || w[L].buyVolume == null) return null;
+    const bar = w[L];
+    const A = a[L];
+    const cvd = [];
+    let s = 0;
+    for (let k = L - 35; k <= L; k++) {
+      s += 2 * (w[k].buyVolume ?? w[k].volume / 2) - (w[k].volume || 0);
+      cvd[k] = s;
+    }
+    let lo = L - 30;
+    let hi = L - 30;
+    for (let k = L - 30; k < L - 2; k++) {
+      if (w[k].low < w[lo].low) lo = k;
+      if (w[k].high > w[hi].high) hi = k;
+    }
+    if (bar.low < w[lo].low && bar.close > w[lo].low && bar.close > bar.open && cvd[L] > cvd[lo]) {
+      return plan('bull', bar, bar.low - 0.2 * A, { why: `Swept the low ${w[lo].low.toFixed(2)} while cumulative delta held higher` });
+    }
+    if (bar.high > w[hi].high && bar.close < w[hi].high && bar.close < bar.open && cvd[L] < cvd[hi]) {
+      return plan('bear', bar, bar.high + 0.2 * A, { why: `Swept the high ${w[hi].high.toFixed(2)} while cumulative delta held lower` });
+    }
+    return null;
+  },
+
+  // Volatility squeeze breakout.
+  squeeze_break(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 120) return null;
+    const bb = (i) => {
+      let m = 0;
+      for (let k = i - 19; k <= i; k++) m += w[k].close;
+      m /= 20;
+      let v = 0;
+      for (let k = i - 19; k <= i; k++) v += (w[k].close - m) ** 2;
+      const sd = Math.sqrt(v / 20);
+      return { m, sd, width: m ? (4 * sd) / m : 0 };
+    };
+    const prev = bb(L - 1);
+    let narrowest = Infinity;
+    for (let i = L - 100; i < L - 1; i++) narrowest = Math.min(narrowest, bb(i).width);
+    if (!(prev.width <= narrowest * 1.05)) return null;
+    const bar = w[L];
+    const up = bar.close > prev.m + 2 * prev.sd;
+    const dn = bar.close < prev.m - 2 * prev.sd;
+    if (!up && !dn) return null;
+    const dir = up ? 'bull' : 'bear';
+    const e50 = ema(w, 50, L);
+    if (up ? bar.close < e50 : bar.close > e50) return null;
+    if (!flowAgrees(bar, dir, 0.1)) return null;
+    const stop = prev.m;
+    return plan(dir, bar, stop, { why: `Broke out of the tightest range in 100 candles with ${up ? 'buyers' : 'sellers'} in control` });
+  },
+
+  // Trend breakout of the last 48 candles.
+  donch_break(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 60) return null;
+    const bar = w[L];
+    const A = a[L];
+    let hh = -Infinity;
+    let ll = Infinity;
+    for (let k = L - 48; k < L; k++) {
+      hh = Math.max(hh, w[k].high);
+      ll = Math.min(ll, w[k].low);
+    }
+    if (!(bar.volume >= 1.5 * avgVolume(w, L))) return null;
+    if (bar.close > hh && w[L - 1].close <= hh && flowAgrees(bar, 'bull', 0.1)) return plan('bull', bar, bar.close - 1.5 * A, { why: `Broke the 48-candle high ${hh.toFixed(2)} on volume` });
+    if (bar.close < ll && w[L - 1].close >= ll && flowAgrees(bar, 'bear', 0.1)) return plan('bear', bar, bar.close + 1.5 * A, { why: `Broke the 48-candle low ${ll.toFixed(2)} on volume` });
+    return null;
+  },
+
+  // Fade a 2.5-sigma stretch from the daily VWAP once delta flips.
+  vwap_fade(ctx) {
+    const { w, a } = ctx;
+    const L = w.length - 1;
+    if (L < 30) return null;
+    const band = vwapBand(w, L - 1);
+    if (!band || !(band.sd > 0)) return null;
+    const prev = w[L - 1];
+    const bar = w[L];
+    const A = a[L];
+    const z = (prev.close - band.mean) / band.sd;
+    if (z >= 2.5 && bar.close < bar.open && flowAgrees(bar, 'bear', 0.1)) {
+      let ext = bar.high;
+      for (let k = L - 3; k < L; k++) ext = Math.max(ext, w[k].high);
+      return plan('bear', bar, ext + 0.2 * A, { why: `Stretched ${z.toFixed(1)} sigma above VWAP ${band.mean.toFixed(2)}, sellers stepping in` });
+    }
+    if (z <= -2.5 && bar.close > bar.open && flowAgrees(bar, 'bull', 0.1)) {
+      let ext = bar.low;
+      for (let k = L - 3; k < L; k++) ext = Math.min(ext, w[k].low);
+      return plan('bull', bar, ext - 0.2 * A, { why: `Stretched ${(-z).toFixed(1)} sigma below VWAP ${band.mean.toFixed(2)}, buyers stepping in` });
     }
     return null;
   },
