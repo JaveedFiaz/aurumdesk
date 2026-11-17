@@ -150,8 +150,17 @@ export function createMemeRadar({ onUpdate, onSignal }) {
         if (futDirect == null) futDirect = false;
       }
     }
-    return getJSON(proxy);
+    // The server is often blocked by Binance too: after 3 failures stop asking
+    // it, so the radar never floods the connection the chart also needs.
+    if (proxyFails >= 3) throw new Error('Binance Futures unavailable');
+    try {
+      return await getJSON(proxy);
+    } catch (e) {
+      proxyFails++;
+      throw e;
+    }
   }
+  let proxyFails = 0;
 
   function add(list, venue, extra = {}) {
     for (const c of list) {
@@ -203,7 +212,7 @@ export function createMemeRadar({ onUpdate, onSignal }) {
         } catch { /* fills in from the stream */ }
       }
     };
-    await Promise.all(Array.from({ length: 6 }, worker));
+    await Promise.all(Array.from({ length: 3 }, worker));
   }
 
   async function loadTickers() {
@@ -239,6 +248,7 @@ export function createMemeRadar({ onUpdate, onSignal }) {
   // Open interest change over the last hour (futures), a few coins per pass.
   let oiAt = 0;
   async function loadOI() {
+    if (futDirect === false && proxyFails >= 3) return;
     const futs = [...coins.values()].filter((x) => x.venue === 'fut');
     for (let n = 0; n < 8 && futs.length; n++) {
       const x = futs[oiAt++ % futs.length];
@@ -279,13 +289,19 @@ export function createMemeRadar({ onUpdate, onSignal }) {
   // Futures candles by polling the server when the browser's futures stream is blocked.
   let pollAt = 0;
   async function pollFutures() {
+    if (proxyFails >= 3) {
+      clearInterval(timers.pollFut);
+      return;
+    }
     const futs = [...coins.values()].filter((x) => x.venue === 'fut');
     for (let n = 0; n < 10 && futs.length; n++) {
       const x = futs[pollAt++ % futs.length];
       try {
         x.candles = (await getJSON(`/api/fut/klines?symbol=${x.symbol}&limit=90`)).map(kline);
         dirty = true;
-      } catch { /* next pass */ }
+      } catch {
+        proxyFails++;
+      }
     }
   }
 

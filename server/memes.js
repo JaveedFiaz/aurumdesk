@@ -17,9 +17,9 @@ export function createMemeUniverse({ fetchImpl = (...a) => fetch(...a), log = ()
   let cache = null;
   let pending = null;
   const errors = {};
-  const get = async (url) => {
+  const get = async (url, timeout = 25000) => {
     try {
-      const res = await fetchImpl(url, { signal: AbortSignal.timeout(25000), headers: { 'User-Agent': 'Mozilla/5.0 PulseScalper' } });
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeout), headers: { 'User-Agent': 'Mozilla/5.0 PulseScalper' } });
       if (!res.ok) {
         errors[url.split('?')[0]] = `HTTP ${res.status}`;
         return null;
@@ -31,6 +31,7 @@ export function createMemeUniverse({ fetchImpl = (...a) => fetch(...a), log = ()
     }
   };
   const small = new Map(); // proxy cache: url -> { at, data }
+  let futDownUntil = 0;
 
   return {
     async universe() {
@@ -72,8 +73,14 @@ export function createMemeUniverse({ fetchImpl = (...a) => fetch(...a), log = ()
       if ((kind === 'klines' || kind === 'oi') && !sym) throw Object.assign(new Error('symbol required'), { status: 400 });
       const hit = small.get(url);
       if (hit && Date.now() - hit.at < ttl) return hit.data;
-      const data = await get(url);
-      if (data == null) throw Object.assign(new Error('Binance Futures did not answer'), { status: 502 });
+      // Binance blocking this server: answer at once for a minute instead of
+      // making every browser request wait for Binance again.
+      if (Date.now() < futDownUntil) throw Object.assign(new Error('Binance Futures unavailable from this server'), { status: 503 });
+      const data = await get(url, 6000);
+      if (data == null) {
+        futDownUntil = Date.now() + 60000;
+        throw Object.assign(new Error('Binance Futures did not answer'), { status: 502 });
+      }
       small.set(url, { at: Date.now(), data });
       if (small.size > 500) small.delete(small.keys().next().value);
       return data;
