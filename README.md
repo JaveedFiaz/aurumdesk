@@ -29,37 +29,27 @@ automatically so you can track performance.
 Only strategies that made money on real history, in both the first 60% and the
 last 40% of the period, are traded ([full results](docs/backtest-results.md)):
 
-Every setup is scored on 8 confluence checks (7 for Bitcoin, which has no COT
-data). Each strategy trades only at the confluence level where its backtest is
-strongest: 6 or 7 of 8 when that still passes the profit gate, otherwise 5 of 8,
-otherwise no filter. About 1.4 trades a day across both markets:
+Only strategies that made money in **each** of the last 3 years (Nov 2023 -
+Nov 2026), with costs, are traded. Strategies that looked good on 1-2 years but
+lost over 3 were removed ([full results](docs/backtest-results.md)):
 
-| Market | TF | Strategy | Target | Min. confluence | Trades | Win % | PF | Total R |
-|---|---|---|---|---|---|---|---|---|
-| Gold | 15m | Volume breakout | 3R | 6/8 | 84 in 2 years | 40 | 1.70 | +36.4 |
-| Gold | 15m | Zone retest | 2R | 5/8 | 30 in 2 years | 47 | 1.65 | +9.8 |
-| Gold | 15m | EMA trend pullback | 3R | 7/8 | 57 in 2 years | 39 | 1.27 | +9.9 |
-| Gold | 5m | Session sweep | 3R | 6/8 | 46 in 1 year | 39 | 1.50 | +14.8 |
-| Gold | 5m | Trap + order flow | 2R | none | 138 in 1 year | 41 | 1.26 | +22.2 |
-| Gold | 5m | Liquidity sweep (FAP-style, with 1H trend), London/NY only | 2R | 5/8 | 107 in 3 years | 43 | 1.31 | +18.7 |
-| Bitcoin | 1h | Trend breakout (48-hour high/low on volume and taker flow) | 3R | none | 492 in 3 years | 32 | 1.14 | +49 |
-| Gold | 4h | VWAP 2-sigma snap-back (swing) | 5R | none | 97 in 3 years | 32 | 2.01 | +66.7 |
-| Gold | 4h | VWAP trend pullback (swing) | 2R | none | 54 in 3 years | 57 | 2.65 | +38.3 |
-| Bitcoin | 4h | VWAP trend pullback (swing) | 2R | none | 93 in 3 years | 46 | 1.60 | +31.6 |
-| Bitcoin | 4h | Trend breakout (swing) | 5R | 5/8 | 54 in 3 years | 30 | 1.63 | +24.7 |
-| Bitcoin | 1h | Zone retest | 5R | none | 50 in 3 years | 38 | 2.06 | +35.6 |
-| Bitcoin | 1h | Previous-day high/low rejection | 5R | none | 146 in 3 years | 29 | 1.28 | +32.4 |
-| Gold | 5m | Strong zone rejection | 2R | none | 29 in 1 year | — | 1.38 | +6.4 |
-| Bitcoin | 15m | Trap with trend (24h) | 2R | 5/7 | 55 in 2 years | 47 | 1.54 | +16.3 |
-| Bitcoin | 15m | EMA trend pullback (24h) | 3R | 6/7 | 137 in 2 years | 34 | 1.35 | +32.0 |
-| Bitcoin | 15m | Volume surge go | 2R | 7/7 | 78 in 2 years | 41 | 1.27 | +13.3 |
-| Bitcoin | 5m | Session sweep | 3R | 5/7 | 63 in 1 year | 49 | 1.88 | +30.4 |
-| Bitcoin | 5m | Trap + order flow | 1.5R | 5/7 | 39 in 1 year | 49 | 1.23 | +5.0 |
+| Market | TF | Strategy | Target | Min. confluence | Trades (3 years) | PF | Total |
+|---|---|---|---|---|---|---|---|
+| Gold | 5m | Liquidity sweep (London/NY, with 1H trend) | 2R | 5/8 | 107 | 1.31 | +18.7R |
+| Gold | 4h | VWAP 2-sigma snap-back | 5R | none | 97 | 2.01 | +66.7R |
+| Gold | 4h | VWAP trend pullback | 2R | none | 54 | 2.65 | +38.3R |
+| Bitcoin | 15m | Trap with trend | 2R | 5/8 | 74 | 1.69 | +26.3R |
+| Bitcoin | 15m | EMA trend pullback | 3R | 6/8 | 203 | 1.24 | +34.6R |
+| Bitcoin | 1h | Trend breakout | 3R | none | 492 | 1.24 | +82.3R |
+| Bitcoin | 1h | Zone retest | 5R | none | 50 | 2.23 | +38.9R |
+| Bitcoin | 1h | Previous-day high/low rejection | 5R | none | 148 | 1.38 | +41.9R |
+| Bitcoin | 4h | VWAP trend pullback | 2R | none | 93 | 1.69 | +34.9R |
+| Bitcoin | 4h | Trend breakout | 5R | 5/8 | 54 | 1.69 | +26.4R |
 
-**Strong zone rejection** (a wick into strong support or resistance, closing back out on 1.2× volume with order flow behind it) runs on every 5m and 15m chart. It only proved profitable on gold 5m; elsewhere its setups are drawn as watch only.
-
-At double trading costs every gold and Bitcoin 15m strategy stays profitable;
-the two Bitcoin 5m strategies drop to watch only. The 1m strategies stay on watch.
+Bitcoin figures use the terminal's 0.02% cost per trade (CFD-like). At Binance
+futures taker fees (0.08%) the 15m strategies and the 1h trend breakout drop
+below the bar; the 1h zone retest and day high/low rejection and both 4h
+strategies still pass.
 
 The server re-tests every play every 12 hours. A play is traded only while,
 with the quality filter, it has 20+ trades, profit factor ≥ 1.15, an average of
