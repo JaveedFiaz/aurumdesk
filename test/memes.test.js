@@ -48,3 +48,11 @@ test('memecoin universe: futures Meme category, new listings and spot pairs are 
   assert.equal(u.fresh.find((f) => f.symbol === 'AIXUSDT').meme, false);
   assert.deepEqual(u.spot.map((s) => s.symbol).sort(), ['FROGUSDT', 'PEPEUSDT']); // PEPE via its futures meme, FROG via the tag
 });
+
+test('crypto tab: each coin runs only its own proven strategies', async () => {
+  const { playsFor } = await import('../shared/altplays.js');
+  assert.deepEqual(playsFor('ETHUSDT').map((p) => [p.tf, p.htf, p.strategies.map((x) => x.id)]), [['H4', 'D1', ['vwap_pullback', 'sr_flip']]]);
+  assert.deepEqual(playsFor('SOLUSDT').map((p) => p.tf), ['H1', 'H4']);
+  assert.deepEqual(playsFor('PEPEUSDT', true).map((p) => [p.tf, p.strategies[0].id]), [['M15', 'trap_flow']]);
+  assert.equal(playsFor('DOGEUSDT', true).some((p) => p.tf === 'M15'), false); // DOGE uses its own altcoin plays
+});

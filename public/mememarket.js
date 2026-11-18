@@ -7,12 +7,14 @@ import { backtest, confRatio } from '../shared/bot.js';
 import { analyze } from '../shared/analysis.js';
 import { DEFAULT_RULES, STRATEGY_BY_ID } from '../shared/strategies.js';
 import { MEME_PLAY } from '../shared/memeplays.js';
+import { ALT_PLAYS, ALT_PERIOD, playsFor } from '../shared/altplays.js';
 import { Overlay } from './overlay.js';
 
 const REST = 'https://data-api.binance.vision/api/v3';
 const WS = 'wss://data-stream.binance.vision/ws/';
-const IV = { M5: '5m', M15: '15m', H1: '1h' };
-const SEC = { M5: 300, M15: 900, H1: 3600 };
+const IV = { M5: '5m', M15: '15m', H1: '1h', H4: '4h', D1: '1d' };
+const SEC = { M5: 300, M15: 900, H1: 3600, H4: 14400, D1: 86400 };
+const TFL = { M5: '5m', M15: '15m', H1: '1h', H4: '4h' };
 const UP = '#16c784';
 const DN = '#ea3943';
 
@@ -25,23 +27,24 @@ async function klines(symbol, tf, limit) {
 const closed = (c, sec) => (c.length && c[c.length - 1].time + sec > Date.now() / 1000 ? c.slice(0, -1) : c);
 export const decimalsFor = (p) => (p >= 100 ? 2 : p >= 1 ? 4 : Math.min(10, Math.max(4, Math.ceil(-Math.log10(p)) + 3)));
 
-const RULES = {
-  ...DEFAULT_RULES,
-  ...MEME_PLAY.rules,
-  rrBy: Object.fromEntries(MEME_PLAY.strategies.map((s) => [s.id, s.rr])),
-  allHours: MEME_PLAY.strategies.map((s) => s.id),
-};
-const GATE = Object.fromEntries(MEME_PLAY.strategies.map((s) => [s.id, s.gate]));
+async function runPlay(symbol, play) {
+  const [c, h] = await Promise.all([klines(symbol, play.tf, 1000), klines(symbol, play.htf, 500)]);
+  const gate = Object.fromEntries(play.strategies.map((x) => [x.id, x.gate]));
+  const rules = { ...DEFAULT_RULES, ...play.rules, rrBy: Object.fromEntries(play.strategies.map((x) => [x.id, x.rr])), allHours: play.strategies.map((x) => x.id) };
+  const trades = backtest(closed(c, SEC[play.tf]), closed(h, SEC[play.htf]), { rules, strategies: Object.keys(gate), tfSec: SEC[play.tf], htfSec: SEC[play.htf] })
+    .filter((t) => confRatio(t) >= gate[t.strategy] - 1e-9)
+    .map((t) => ({ ...t, tf: play.tf }));
+  return { trades, last: c[c.length - 1]?.close };
+}
 
-// The strategy on one coin: live setups (pending / running) and closed trades.
+// The coin's strategies: live setups (pending / running) and closed trades.
 export async function scanCoin(symbol) {
-  const [c, h] = await Promise.all([klines(symbol, 'M15', 1000), klines(symbol, 'H1', 500)]);
-  const trades = backtest(closed(c, 900), closed(h, 3600), { rules: RULES, strategies: Object.keys(GATE), tfSec: 900, htfSec: 3600 })
-    .filter((t) => confRatio(t) >= GATE[t.strategy] - 1e-9);
+  const runs = await Promise.all(playsFor(symbol).map((p) => runPlay(symbol, p)));
+  const trades = runs.flatMap((r) => r.trades).sort((a, b) => b.signalTime - a.signalTime);
   return {
     live: trades.filter((t) => t.status !== 'closed'),
     history: trades.filter((t) => t.status === 'closed'),
-    last: c[c.length - 1]?.close,
+    last: runs[0]?.last,
   };
 }
 
@@ -80,7 +83,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
         .forEach((z, n) => {
           const entry = bull ? z.top : z.bottom;
           const stop = bull ? z.bottom - 0.25 * result.atr : z.top + 0.25 * result.atr;
-          out.push({ dir, top: z.top, bottom: z.bottom, time: z.createdTime ?? z.time, watch: true, strong: z.score >= 70, score: z.score, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply', src: st.tf === 'M15' ? '15m' : st.tf === 'M5' ? '5m' : '1h', plan: { entry, stop, target: entry + (bull ? 2 : -2) * Math.abs(entry - stop) }, primary: n === 0, near: Math.abs(price - entry) <= result.atr });
+          out.push({ dir, top: z.top, bottom: z.bottom, time: z.createdTime ?? z.time, watch: true, strong: z.score >= 70, score: z.score, kind: /OB/.test(z.kind) ? 'order block' : bull ? 'demand' : 'supply', src: TFL[st.tf], plan: { entry, stop, target: entry + (bull ? 2 : -2) * Math.abs(entry - stop) }, primary: n === 0, near: Math.abs(price - entry) <= result.atr });
         });
     }
     return out;
@@ -111,7 +114,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
   function renderPanel() {
     const sc = st.scan;
     const price = st.candles[st.candles.length - 1]?.close;
-    const s = MEME_PLAY.stats;
+    const alt = ALT_PLAYS[st.symbol];
     const t = sc?.live[0];
     let html;
     if (t) {
@@ -119,7 +122,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
       const risk = Math.abs(t.entry - t.stop);
       const r = price != null ? ((bull ? 1 : -1) * (price - t.entry)) / risk : 0;
       const passed = t.factors.filter((f) => f.ok).length;
-      html = `<div class="mm-sig ${t.dir}"><div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${st.name}</span><span class="gs">15m · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
+      html = `<div class="mm-sig ${t.dir}"><div class="gh"><span class="${t.dir}">${bull ? '▲ LONG' : '▼ SHORT'} ${st.name}</span><span class="gs">${TFL[t.tf] || ''} · ${t.status === 'open' ? 'IN TRADE' : 'ENTER NOW'}</span></div>
         <div class="muted">${STRATEGY_BY_ID[t.strategy]?.name || t.strategy} · ${t.why || ''}</div>
         <div class="gr"><span>TARGET</span><b class="bull">${fmt(t.target)}</b></div>
         <div class="gr"><span>ENTRY</span><b>${fmt(t.entry)}</b></div>
@@ -127,10 +130,14 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
         <div class="gr"><span>NOW</span><b>${fmt(price)}</b><i class="${r >= 0 ? 'bull' : 'bear'}">${r >= 0 ? '+' : ''}${r.toFixed(2)}R</i></div>
         <div class="gconf"><b>Confluence ${passed}/${t.factors.length} ✓</b><ul>${t.factors.map((f) => `<li class="${f.ok ? 'ok' : 'no'}">${f.ok ? '✓' : '✗'} ${f.label}</li>`).join('')}</ul></div></div>`;
     } else {
-      html = `<div class="mm-sig"><div class="gh"><span>No setup on ${st.name || '—'}</span><span class="gs">15m</span></div>
-        <div class="muted">A long or short appears here (and as a box on the chart) when a trap with order flow and 6 of 8 confluence checks forms. Watch the buy and sell zones meanwhile.</div></div>`;
+      html = `<div class="mm-sig"><div class="gh"><span>No setup on ${st.name || '—'}</span><span class="gs">${playsFor(st.symbol).map((p) => TFL[p.tf]).join(' · ')}</span></div>
+        <div class="muted">A long or short appears here (and as a box on the chart) when one of this coin's proven strategies fires. Watch the buy and sell zones meanwhile.</div></div>`;
     }
-    $('mmSignal').innerHTML = `${html}<div class="mm-stats"><b>Strategy record</b> (${s.period}, 23 memecoins): ${s.trades} trades, ${(s.winRate * 100).toFixed(0)}% won, profit factor ${s.pf}, ${s.totalR >= 0 ? '+' : ''}${s.totalR}R, profitable on ${s.coins} coins. About 1–2 signals a week across all memecoins. Every other strategy lost money on memecoins and is not used.</div>`;
+    const ms = MEME_PLAY.stats;
+    const record = alt
+      ? `<b>Strategies for ${alt.name}</b> (${ALT_PERIOD}, profitable every year, longs and shorts): ${alt.plays.flatMap((p) => p.strategies.map((x) => `${STRATEGY_BY_ID[x.id]?.name || x.id} ${TFL[p.tf]} ${x.rr}R: ${x.stats}`)).join(' · ')}`
+      : `<b>Strategy record</b> (${ms.period}, 23 memecoins): ${ms.trades} trades, ${(ms.winRate * 100).toFixed(0)}% won, profit factor ${ms.pf}, ${ms.totalR >= 0 ? '+' : ''}${ms.totalR}R, profitable on ${ms.coins} coins. About 1–2 signals a week across all memecoins.`;
+    $('mmSignal').innerHTML = `${html}<div class="mm-stats">${record}</div>`;
   }
 
   function stream() {
@@ -203,7 +210,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
   async function scanAll() {
     if (st.scanning) return;
     st.scanning = true;
-    const list = getCoins().slice();
+    const list = allCoins();
     const queue = [...list];
     const now = Date.now() / 1000;
     const worker = async () => {
@@ -217,7 +224,7 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
             const was = st.found.get(key);
             const id = `${t.strategy}:${t.signalTime}`;
             st.found.set(key, { ...x, t, id, price: sc.last });
-            if ((!was || was.id !== id) && now - t.signalTime < 3 * 900) onSignal?.(x, t);
+            if ((!was || was.id !== id) && now - t.signalTime < 2 * (SEC[t.tf] || 900) + 900) onSignal?.(x, t);
           } else st.found.delete(key);
         } catch { /* skip this pass */ }
         renderScan();
@@ -235,13 +242,17 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
       const bull = x.t.dir === 'bull';
       return `<li><button type="button" class="mm-pick" data-s="${x.symbol}" data-n="${x.name}"><b class="${x.t.dir}">${bull ? '▲ LONG' : '▼ SHORT'}</b> ${x.name}
         <span class="muted small">${x.t.status === 'open' ? 'running' : 'enter now'} · entry ${fmt(x.t.entry)} · SL ${fmt(x.t.stop)} · TP ${fmt(x.t.target)}</span></button></li>`;
-    }).join('') || '<li class="empty">No memecoin setup right now. The scanner checks every coin after each 15-minute candle closes.</li>';
+    }).join('') || '<li class="empty">No setup right now. The scanner checks every coin after each 15-minute candle closes.</li>';
     $('mmTabBadge').textContent = rows.length ? String(rows.length) : '';
   }
 
+  const allCoins = () => {
+    const alts = Object.entries(ALT_PLAYS).map(([symbol, a]) => ({ symbol, name: a.name, alt: true }));
+    return [...alts, ...getCoins().filter((x) => !ALT_PLAYS[x.symbol])];
+  };
   function renderCoins(filter = '') {
-    const list = getCoins().filter((x) => !filter || x.name.toLowerCase().includes(filter.toLowerCase()));
-    $('mmCoins').innerHTML = list.slice(0, 200).map((x) => `<button type="button" class="mm-pick" data-s="${x.symbol}" data-n="${x.name}" aria-pressed="${x.symbol === st.symbol}">${x.name}${st.found.has(x.symbol) ? ` <i class="${st.found.get(x.symbol).t.dir}">●</i>` : ''}</button>`).join('');
+    const list = allCoins().filter((x) => !filter || x.name.toLowerCase().includes(filter.toLowerCase()));
+    $('mmCoins').innerHTML = list.slice(0, 200).map((x) => `<button type="button" class="mm-pick${x.alt ? ' alt' : ''}" data-s="${x.symbol}" data-n="${x.name}" aria-pressed="${x.symbol === st.symbol}">${x.name}${st.found.has(x.symbol) ? ` <i class="${st.found.get(x.symbol).t.dir}">●</i>` : ''}</button>`).join('');
   }
 
   document.addEventListener('click', (e) => {
@@ -270,7 +281,8 @@ export function createMemeMarket({ LC, locale, onSignal, getCoins }) {
         next();
       }
       renderCoins($('mmSearch').value);
-      if (!st.symbol && first) select(first.symbol, first.name);
+      const top = allCoins()[0];
+      if (!st.symbol && (top || first)) select((top || first).symbol, (top || first).name, ALT_PLAYS[(top || first).symbol] ? ALT_PLAYS[(top || first).symbol].plays[0].tf : 'M15');
       setTimeout(() => chart.timeScale().applyOptions({}), 50);
     },
     renderCoins: () => renderCoins($('mmSearch').value),

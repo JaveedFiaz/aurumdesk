@@ -639,7 +639,7 @@ function renderHeader() {
     const b = state.bots[m.id];
     const sig = b ? Object.values(b.tfs).flatMap((t) => t.signals || []).find((s) => s.status === 'pending' || s.status === 'open') : null;
     return `<button type="button" data-m="${m.id}" aria-pressed="${!memeMode && m.id === state.market}">${esc(m.label)}<span class="p" id="mp-${m.id}">${fmt(state.prices[m.id])}</span>${sig ? `<span class="sig ${sig.dir}">${sig.dir === 'bull' ? 'BUY' : 'SELL'}</span>` : ''}</button>`;
-  }).join('') + `<button type="button" data-m="meme" aria-pressed="${memeMode}">Memecoins<span class="sig bull" id="mmTabBadge"></span></button>`;
+  }).join('') + `<button type="button" data-m="meme" aria-pressed="${memeMode}">Crypto<span class="sig bull" id="mmTabBadge"></span></button>`;
   $('tfs').innerHTML = TFS.map((t) => `<button type="button" data-tf="${t}" aria-pressed="${t === state.tf}">${TF[t].label}</button>`).join('');
   $('views').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   $('layers').innerHTML = LAYERS.map((l) => `<button type="button" data-layer="${l.id}" aria-pressed="${!!state.layers[l.id]}">${l.label}</button>`).join('');
@@ -1387,7 +1387,7 @@ function setMemeMode(on) {
         locale: safeLocale(),
         getCoins: memeCoinsForMarket,
         onSignal: (x, t) => {
-          toast(`<b>${esc(x.name)}</b> ${t.dir === 'bull' ? 'LONG' : 'SHORT'} setup (memecoin trap + order flow)`);
+          toast(`<b>${esc(x.name)}</b> ${t.dir === 'bull' ? 'LONG' : 'SHORT'} setup (${t.tf === 'H4' ? '4h' : t.tf === 'H1' ? '1h' : '15m'})`);
           beep(t.dir === 'bull' ? 660 : 440);
         },
       });
