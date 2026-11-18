@@ -45,6 +45,7 @@ lost over 3 were removed ([full results](docs/backtest-results.md)):
 | Bitcoin | 1h | Previous-day high/low rejection | 5R | none | 148 | 1.38 | +41.9R |
 | Bitcoin | 4h | VWAP trend pullback | 2R | none | 93 | 1.69 | +34.9R |
 | Bitcoin | 4h | Trend breakout | 5R | 5/8 | 54 | 1.69 | +26.4R |
+| US30 | 1h | Liquidity sweep + absorption (reversal after stops are taken) | 2R | 5/8 | 47 (2 years) | 1.64 | — |
 
 Bitcoin figures use the terminal's 0.02% cost per trade (CFD-like). At Binance
 futures taker fees (0.08%) the 15m strategies and the 1h trend breakout drop
@@ -114,6 +115,7 @@ backtests.
 | Gold price | Live spot XAU/USD from Swissquote's public quote feed, polled every second (set `SPOT_GOLD=0` to turn it off). The candles, order flow and signals come from PAXG/USDT, which the strategies were tested on, shifted by the live spot–PAXG gap so everything lines up with spot. |
 | Gold candles | PAXG/USDT on Binance by default. Set `PROVIDER=oanda` with a free OANDA practice key for spot XAU/USD, the same prices as TradingView's `OANDA:XAUUSD`. OANDA candles carry no buy/sell volume, so the order-flow checks are skipped and the gold 5m strategy (which requires them) stays idle on that feed. |
 | Bitcoin prices | BTC/USDT on Binance. |
+| US30 | Dow Jones futures (YM=F) from Yahoo Finance: 1h candles for 2 years, real volume, no key. No order book or order flow (that is paid CME data). Set `US30_SYMBOL` to change the symbol. |
 | Order flow, whales, order book | Binance trade stream and order book. For gold this is the PAXG market, shifted to line up with the price feed. |
 | Big players (gold) | CFTC Commitments of Traders, used as one confluence check. |
 | News | Cointelegraph, CoinDesk and MarketWatch feeds, and the Forex Factory weekly calendar. Headlines arrive a few seconds after publication. |

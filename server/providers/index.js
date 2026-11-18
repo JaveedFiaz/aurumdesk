@@ -2,6 +2,7 @@ import { createBinance } from './binance.js';
 import { createTwelveData } from './twelvedata.js';
 import { createDemo } from './demo.js';
 import { createOanda } from './oanda.js';
+import { createYahoo } from './yahoo.js';
 
 export function createProvider(env = process.env) {
   const name = (env.PROVIDER || 'binance').toLowerCase();
@@ -47,8 +48,11 @@ export function createProviders(env = process.env) {
   const gold = createProvider(env);
   if (gold.demo) {
     const btc = scaled(createDemo(), 29, 'Demo data');
-    return { providers: { gold, btc }, flowProviders: { gold, btc } };
+    const us30 = scaled(createDemo(), 21, 'Demo data');
+    return { providers: { gold, btc, us30 }, flowProviders: { gold, btc, us30: null } };
   }
   const btc = createBinance({ base: env.BINANCE_BASE || undefined, symbol: env.BTC_SYMBOL || 'BTCUSDT' });
-  return { providers: { gold, btc }, flowProviders: { gold: createFlowProvider(env, gold), btc } };
+  // US30: Dow futures from Yahoo. No free order flow or order book exists for it.
+  const us30 = createYahoo({ symbol: env.US30_SYMBOL || 'YM=F' });
+  return { providers: { gold, btc, us30 }, flowProviders: { gold: createFlowProvider(env, gold), btc, us30: null } };
 }
