@@ -44,6 +44,24 @@ export const MARKETS = [
       H4: { htf: 'D1', history: 6600, strategies: [{ id: 'vwap_pullback', rr: 2, allHours: true, gate: 0 }, { id: 'donch_break', rr: 5, allHours: true, gate: 0.625 }] },
     },
   },
+  {
+    id: 'us30',
+    label: 'US30',
+    pair: 'Dow Jones',
+    symbol: 'YM=F',
+    tv: 'OANDA:US30USD',
+    unit: 'contract',
+    lot: 1,
+    costBps: 1,
+    closedWeekends: true,
+    // Dow futures, 1h, Jun 2024 - Nov 2026 (the history Yahoo provides): of 150
+    // strategy combinations only liquidity absorption passed the strict test
+    // (profitable in each third of the period, PF 1.68, longs and shorts both
+    // positive): 38 trades, so about one signal every three weeks.
+    plays: {
+      H1: { htf: 'H4', history: 11000, strategies: [{ id: 'liq_absorb', rr: 2, allHours: true, gate: 0.625 }] },
+    },
+  },
 ];
 
 export const MARKET_BY_ID = Object.fromEntries(MARKETS.map((m) => [m.id, m]));

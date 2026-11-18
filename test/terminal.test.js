@@ -147,7 +147,7 @@ test('HTTP API: both markets, every timeframe, flow, news, COT, stream and a gua
   const get = async (p) => (await fetch(base + p)).json();
 
   const cfg = await get('/api/config');
-  assert.deepEqual(cfg.markets.map((m) => m.id), ['gold', 'btc']);
+  assert.deepEqual(cfg.markets.map((m) => m.id), ['gold', 'btc', 'us30']);
   assert.deepEqual(cfg.tfs, ['M1', 'M5', 'M15', 'H1', 'H4']);
 
   let bot;
