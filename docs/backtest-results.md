@@ -174,3 +174,26 @@ over 3 and were removed.
 The 1m plays (gold and Bitcoin sweep into zone) were removed too: the PAXG 1m
 market is too thin for a 3-year test. Requiring the 1H trend did not rescue the
 session sweep: almost all of its trades already had the trend agreeing.
+
+## Altcoins and EUR/USD (Crypto tab)
+
+ETH, SOL, XRP, BNB, LTC, ADA, DOGE and EUR/USD (Binance EURUSDT), 1h and 4h,
+every strategy at 2/3/5R and 0/5/8/6/8 confluence: 2,246 combinations. Kept only
+if profitable in each of the 3 years, PF 1.3+, 40+ trades, longs and shorts both
+profitable, and (mostly) still profitable at 0.08% fees:
+
+| Coin | TF | Strategy | Target | Trades | PF | Total |
+|---|---|---|---|---|---|---|
+| ETH | 4h | VWAP trend pullback, 5/8+ | 2R | 43 | 2.11 | +23.0R |
+| ETH | 4h | S/R flip | 5R | 102 | 1.53 | +36.9R |
+| SOL | 1h | EMA trend pullback, 5/8+ | 5R | 155 | 1.57 | +62.6R |
+| SOL | 4h | VWAP trend pullback | 3R | 68 | 1.60 | +25.0R |
+| XRP | 1h | Volume surge go | 3R | 50 | 1.77 | +24.5R |
+| DOGE | 1h | Squeeze breakout | 5R | 103 | 1.74 | +54.0R |
+| DOGE | 4h | EMA trend pullback | 5R | 112 | 1.82 | +60.1R |
+| DOGE | 4h | VWAP trend pullback | 5R | 75 | 1.57 | +31.0R |
+| ADA | 4h | VWAP trend pullback | 3R | 74 | 1.51 | +24.7R |
+
+The 4h VWAP trend pullback passed on ETH, SOL, DOGE, ADA and Bitcoin: the most
+consistent result. EUR/USD: one combination passed, with nearly all profit from
+shorts during a falling euro, so no forex strategy was added.
