@@ -838,7 +838,7 @@ function renderHero() {
   if (!best) {
     const testing = Object.entries(b.tfs).filter(([, t]) => t.pending).map(([tf]) => TF[tf].label);
     $('heroMeta').textContent = '';
-    el.innerHTML = `<div class="radar"></div><div class="center"><b>Scanning 1m · 5m · 15m</b></div>
+    el.innerHTML = `<div class="radar"></div><div class="center"><b>Scanning ${Object.keys(b.tfs).map((tf) => TF[tf].label).join(" · ")}</b></div>
       <div class="center muted small">${testing.length ? `Backtesting ${testing.join(', ')} on real history. This takes a few minutes after a restart.` : 'No setup right now. Every closed candle is checked for a zone touch, a trap or a breakout, then verified with volume, liquidity and order flow.'}</div>
       ${waits.slice(0, 4).join('')}`;
     return;

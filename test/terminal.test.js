@@ -156,7 +156,7 @@ test('HTTP API: both markets, every timeframe, flow, news, COT, stream and a gua
     if (Object.values(bot.tfs).every((x) => !x.pending)) break;
     await new Promise((r) => setTimeout(r, 100));
   }
-  for (const tf of ['M1', 'M5', 'M15', 'H1', 'H4']) {
+  for (const tf of ['M15', 'H1', 'H4']) {
     assert.ok(Array.isArray(bot.tfs[tf].stats) && Array.isArray(bot.tfs[tf].signals) && Array.isArray(bot.tfs[tf].areas), tf);
     assert.equal(bot.tfs[tf].tf, tf);
   }

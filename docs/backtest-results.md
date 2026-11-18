@@ -148,3 +148,29 @@ and only strategies whose sells also made money were kept:
 
 Rejected: gold 1H trend breakout (+71.6R, but its shorts lost: the profit was
 the gold rally, not the rule). Trades last 1-4 days on 4H and about a day on 1H.
+
+## 3-year check of every traded strategy (Nov 2023 - Nov 2026)
+
+The live gate tests 5m strategies on about the last 12 months only (the history
+the server loads). After a losing gold 5m session-sweep trade, every traded
+strategy was re-tested on 3 years: several that passed on 1-2 years lost money
+over 3 and were removed.
+
+| Strategy | Result over 3 years | Avg R by year | Decision |
+|---|---|---|---|
+| Gold 5m session sweep (6/8, 3R) | -4.0R, PF 0.87 | -0.69 / -0.16 / +0.33 | removed |
+| Gold 5m trap + order flow (2R) | -14.2R, PF 0.93 | -0.31 / -0.13 / +0.14 | removed |
+| Gold 5m zone rejection (2R) | -6.0R, PF 0.89 | -0.11 / -0.45 / +0.22 | removed |
+| Gold 15m volume breakout (6/8, 3R) | +5.1R, PF 1.07 | -0.67 / +0.65 / +0.14 | removed |
+| Gold 15m zone retest (5/8, 2R) | +7.6R, PF 1.38 | -0.23 / +0.62 / +0.41 | removed |
+| Gold 15m EMA pullback (7/8, 3R) | -5.8R, PF 0.66 | -0.31 / -0.18 / -0.24 | removed |
+| Gold 5m liquidity sweep (5/8, 2R) | +18.7R, PF 1.31 | +0.31 / +0.22 / +0.10 | kept |
+| Bitcoin 15m volume surge (7/8, 2R) | +8.6R, PF 1.10 | +0.12 / +0.05 / +0.05 | removed (PF < 1.15) |
+| Bitcoin 5m trap + order flow (1.5R) | -75.6R, PF 0.83 | -0.12 / -0.22 / +0.00 | removed |
+| Bitcoin 5m session sweep (5/8, 3R) | -22.3R, PF 0.88 | +0.04 / -0.51 / +0.24 | removed |
+| Bitcoin 15m trap with trend (5/8, 2R) | +26.3R, PF 1.69 | +0.57 / +0.08 / +0.51 | kept |
+| Bitcoin 15m EMA pullback (6/8, 3R) | +34.6R, PF 1.24 | +0.06 / +0.40 / +0.06 | kept |
+
+The 1m plays (gold and Bitcoin sweep into zone) were removed too: the PAXG 1m
+market is too thin for a 3-year test. Requiring the 1H trend did not rescue the
+session sweep: almost all of its trades already had the trend agreeing.
